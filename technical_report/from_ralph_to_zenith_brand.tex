@@ -185,6 +185,9 @@
 \newcommand{\code}[1]{#1}
 \renewcommand{\labelitemi}{\textcolor{accent}{\textbullet}}
 
+% IP notice block reused on the cover, as a Section 2 footnote, and in the appendix.
+\newcommand{\ipnoticebody}{\textit{\textbf{Intellectual Property Notice}: The browser-based physics game task referred to in this Technical Report as ``ii-sling-physics-game'' was developed internally by Intelligent Internet (L42 Ltd.) as a software engineering benchmark for evaluating long-horizon agent harness performance. It references third-party intellectual property solely for the purpose of describing benchmark tasks. The game concept used as the basis for this benchmark is inspired by a third-party commercial game. No third-party assets, code, or proprietary materials were used in the development of the benchmark implementation. Any resemblance to third-party intellectual property is incidental to the benchmarking purpose. This Technical Report is not affiliated with or endorsed by any third-party game developer or publisher. All third-party trade marks and copyrights referenced herein remain the property of their respective owners. Intelligent Internet (L42 Ltd.) makes no claim of ownership over any third-party intellectual property referenced in this report.}}
+
 \title{}
 \author{}
 \date{}
@@ -250,6 +253,10 @@ Our Zenith method keeps the useful parts of repeated review while making the loo
 \end{epigraph}
 
 \vfill
+
+% IP Notice on the cover page (per Legal's recommendation).
+{\footnotesize\color{muted}\ipnoticebody\par}
+
 \end{titlepage}
 
 % =========================================================================
@@ -296,7 +303,7 @@ The final task set spans several domains: complete app and website builds, repos
 \rowcolor{tablehead}\textbf{\color{white}Family} & \textbf{\color{white}Task} & \textbf{\color{white}Source} & \textbf{\color{white}What the agent must do} & \textbf{\color{white}Why it is long-horizon} \\
 \midrule
 \endhead
-Product builds & \code{Angry Bird} & Internal & Build a browser game from a multi-file specification with level references and fidelity constraints. & Carry many linked gameplay, visual, physics, and content requirements across a long implementation path. \\
+Product builds & \code{ii-sling-physics-game}\footnotemark[1] & Internal & Build a browser game from a multi-file specification with level references and fidelity constraints. & Carry many linked gameplay, visual, physics, and content requirements across a long implementation path. \\
 \rowcolor{tableband}
 Product builds & \code{Cowork} & Internal & Build a full desktop app around a real agent SDK with permissions, browser use, MCP, and plugins. & Crosses architecture, UI, runtime integration, permissions, tool use, and verification. \\
 Repository-scale & \code{Ydata Profiling} & NL2Repo-Bench & Implement a substantial software library from a broad feature specification. & Preserve broad functionality across many modules, not solve one isolated issue. \\
@@ -311,6 +318,9 @@ ML / research & \code{Paperbench Ftrl} & PaperBench & Reproduce the methods, exp
 \bottomrule
 \end{longtable}
 \endgroup
+
+% IP notice footnote anchored to the first \code{ii-sling-physics-game} mention above.
+\footnotetext[1]{\ipnoticebody}
 
 % =========================================================================
 % METHODS
@@ -558,7 +568,7 @@ RALPH changes the completion pressure. A later session must reopen the task, com
 \midrule
 \code{Git-convert} & The one-session run claimed Git compatibility even though local checks were still failing. A later RALPH session reopened the implementation and found many remaining compatibility bugs. & A plausible completion claim can hide broad unfinished work. \\
 \rowcolor{tableband}
-\code{Angry Bird} & One RALPH session called the game feature-complete, but a later session still found concrete gameplay and level-fidelity gaps. & Reopening the task can surface missing requirements after a self-reported done state. \\
+\code{ii-sling-physics-game} & One RALPH session called the game feature-complete, but a later session still found concrete gameplay and level-fidelity gaps. & Reopening the task can surface missing requirements after a self-reported done state. \\
 \code{ydata-profiling} & Later RALPH passes kept finding public API and compatibility gaps. & Long-tail gaps can remain after several apparently productive passes. \\
 \bottomrule
 \end{tabular}
@@ -566,7 +576,7 @@ RALPH changes the completion pressure. A later session must reopen the task, com
 
 \vspace{6pt}
 
-Detailed clips are in Appendix~A. The scores move in the same direction on these examples: Claude \code{Git-convert} improved from \code{0.2067} to \code{0.287}, \code{Angry Bird} from \code{0.30} to \code{0.55}, and \code{ydata-profiling} from \code{0.009166} to \code{0.06141}.
+Detailed clips are in Appendix~A. The scores move in the same direction on these examples: Claude \code{Git-convert} improved from \code{0.2067} to \code{0.287}, \code{ii-sling-physics-game} from \code{0.30} to \code{0.55}, and \code{ydata-profiling} from \code{0.009166} to \code{0.06141}.
 
 The lesson is that repeated reopening helps. The cost is that RALPH repeatedly rediscovers the task, so it improves premature completion but still lacks a principled stopping rule.
 
@@ -613,7 +623,7 @@ The \code{Git-to-Zig} milestone-10 run is a clearer example. At that point, mile
 \midrule
 \code{Git-to-Zig} milestone 10 & Milestone generated after nine earlier milestones had sealed the local Git foundation. The resulting task order starts with packed-ref visibility, then commands that depend on refs/index/worktree helpers, then merge/pull only in bounded fast-forward and local/offline cases. & Milestone-local planning can turn a broad late-stage goal into a dependency-aware plan based on the implementation that actually exists. \\
 \rowcolor{tableband}
-\code{Angry Bird} milestone 3 & Focused gameplay checks passed, but the independent verifier still caught a build regression. & Independent testing can catch regressions outside the worker's local checks. \\
+\code{ii-sling-physics-game} milestone 3 & Focused gameplay checks passed, but the independent verifier still caught a build regression. & Independent testing can catch regressions outside the worker's local checks. \\
 \code{Git-to-Zig} & Visible command output matched, but the verifier found a durable repository-state mismatch. & Testing must inspect state, not only visible output. \\
 \rowcolor{tableband}
 \code{Chess engine} & The verifier caught a problem in the evidence used to compare engine strength. & Milestone transition depends on trustworthy evidence, not only implementation claims. \\
@@ -641,7 +651,7 @@ Zenith keeps the milestone loop, but adds an adaptive control layer. The orchest
 \midrule
 \code{PaperBench RICE} & Zenith uses deeper domain planning and task-specific workers instead of one generic coding role. & Planning and worker definitions can adapt to the domain. \\
 \rowcolor{tableband}
-\code{Angry Bird} & The run separates game-engine work from content work and synthesizes reusable guidance for later sessions. & Skills and worker roles can preserve reusable knowledge. \\
+\code{ii-sling-physics-game} & The run separates game-engine work from content work and synthesizes reusable guidance for later sessions. & Skills and worker roles can preserve reusable knowledge. \\
 \code{Git-to-Zig} & The harness defines specialist workers and validators for transport, porcelain, and durable repository state. & A large compatibility surface needs specialized workers and layered validators. \\
 \bottomrule
 \end{tabular}
@@ -731,6 +741,12 @@ Planning is still useful, but the done signal needs to be harder to fake. Milest
 
 The clips in this appendix are short excerpts from run artifacts. They are included so the examples in the Results section are inspectable without requiring access to the original machine or full trace logs.
 
+\vspace{6pt}
+\begin{takeaway}
+\footnotesize\ipnoticebody
+\end{takeaway}
+\vspace{6pt}
+
 \subsection{Appendix A: One-session $\rightarrow$ RALPH}
 
 \subsubsection{Git-convert / Git-to-Zig}
@@ -799,7 +815,7 @@ git grep        - Searched committed tree instead of working tree
 git blame       - No uncommitted changes support
 \end{cbox}
 
-\subsubsection{Angry Bird}
+\subsubsection{ii-sling-physics-game}
 
 \textbf{Before: a session declared the game complete.}
 
@@ -826,7 +842,7 @@ Tutorial input guard
 Scroll-wheel zoom and double-tap zoom reset could fire during the tutorial overlay,
 causing the camera to zoom while the "How to Play" screen was visible.
 
-Compared all 30 levels against their wiki reference images using parallel agents.
+Compared all 30 levels against their internal reference images using parallel agents.
 Identified 4 levels with significant fidelity gaps (rated 2-3/5).
 \end{cbox}
 
@@ -834,7 +850,7 @@ Identified 4 levels with significant fidelity gaps (rated 2-3/5).
 Identified 4 real bugs and fixed them all
 
 Lose-to-win transition freeze at 900ms
-Critical bug: when all pigs were defeated exactly at the 900ms `loseTransition`
+Critical bug: when all target characters were defeated exactly at the 900ms `loseTransition`
 timer ... the game would freeze with no transition.
 \end{cbox}
 
@@ -998,7 +1014,7 @@ after worktree mutation and transfer primitives are in place.
 }
 \end{cbox}
 
-\subsubsection{Angry Bird: build regression caught after gameplay checks passed}
+\subsubsection{ii-sling-physics-game: build regression caught after gameplay checks passed}
 
 \begin{cbox}
 {
@@ -1058,21 +1074,21 @@ of Reinforcement Learning with Explanation and I've already noted the
 addendum's explicit out-of-scope items.
 \end{cbox}
 
-\textbf{Angry Bird: planning from an empty spec repo before workers start.}
+\textbf{ii-sling-physics-game: planning from an empty spec repo before workers start.}
 
 \begin{cbox}
 I'm choosing a multi-milestone strategy. The repo is greenfield, the game is
 physics-heavy, and level/content fidelity depends on systems that need to be
-validated before later episodes build on them.
+validated before later chapters build on them.
 
 Milestone: core-playable-slice
 - Vite + Phaser 3 + Matter.js game shell, scene/state structure, slingshot
-  aiming and launch, camera behavior, pig/block/TNT resolution, score/win/lose
+  aiming and launch, camera behavior, target/block/hazard resolution, score/win/lose
   loop, and a stable window.gameTestAPI.
 
-Milestone: episode-1-campaign
+Milestone: chapter-1-campaign
 - Menu and level-select shell, sequential unlock, in-session best score/star
-  retention, all Episode 1 levels, and the Red/Blues gameplay needed.
+  retention, all chapter-1 levels, and the Type-A/Type-B character gameplay needed.
 
 Milestone: production-presentation-and-regression
 - Remaining original generated art/audio replacement work, finalized HUD/menu
@@ -1163,20 +1179,20 @@ Selected work rules:
 }
 \end{cbox}
 
-\subsubsection{Angry Bird: adaptive worker skills and reusable guidance}
+\subsubsection{ii-sling-physics-game: adaptive worker skills and reusable guidance}
 
 \textbf{Worker skill split.}
 
 \begin{cbox}
 name: game-engine-worker
 description: Implements core game engine features - physics, mechanics, systems,
-  UI, audio, and game logic for the Angry Birds browser game.
+  UI, audio, and game logic for the ii-sling-physics-game browser game.
 \end{cbox}
 
 \begin{cbox}
 name: game-content-worker
 description: Creates game content - level data, sprites, and audio assets for the
-  Angry Birds browser game using reference images and wiki sources.
+  ii-sling-physics-game browser game using internal reference images and specification sources.
 \end{cbox}
 
 \textbf{Core-engine validation synthesis.}
@@ -1189,7 +1205,7 @@ description: Creates game content - level data, sprites, and audio assets for th
   "appliedUpdates": [
     { "target": "library",
       "description": "Created phaser-patterns.md documenting entity architecture pattern (pure data + Phaser class + back-references), Phaser timer convention, and input handling for agent-browser testing",
-      "sourceFeature": "blocks-and-pigs, slingshot-mechanics" }
+      "sourceFeature": "blocks-and-targets, slingshot-mechanics" }
   ],
   "suggestedGuidanceUpdates": [
     { "target": "skills",
@@ -1204,7 +1220,7 @@ description: Creates game content - level data, sprites, and audio assets for th
 \clearpage
 \section{Result Detail}
 
-\subsection*{Angry Bird}
+\subsection*{ii-sling-physics-game}
 
 \noindent\begin{tabular}{@{}llrrr@{}}
 \toprule
