@@ -123,6 +123,7 @@ class ProjectController:
         project_id: str,
         max_steps: int | None = None,
     ) -> Envelope:
+        self.store.sync_workspace_skill_surfaces(project_id)
         coordinator = MissionCoordinator(
             self.store, project_id, self.dispatcher, self.terminal_reviewer
         )
@@ -134,6 +135,7 @@ class ProjectController:
             steps += 1
             if max_steps is not None and steps >= max_steps:
                 break
+        self.store.sync_workspace_skill_surfaces(project_id)
         return self._build_envelope(project_id, dag_mode="frontier")
 
     def end_mission(self, project_id: str) -> Envelope:

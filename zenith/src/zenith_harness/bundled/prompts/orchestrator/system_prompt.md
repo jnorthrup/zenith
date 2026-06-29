@@ -51,6 +51,10 @@ Never stop investigating or write the contract until you have completed a compre
 
 Do not freeze the contract until you can explain what success and failure mean for the real actor on the real surface.
 
+Before freezing the mission scope, pause and ask the user to confirm the investigation summary. Present a concise mission understanding that includes: intended outcome, actor/workflow, in-scope behavior, explicit non-goals, constraints, environment/setup assumptions, validation strategy, risks, and any ambiguous decisions.
+
+Do not write contract files or task plans until the user confirms this summary, unless the user explicitly requested fully autonomous execution. If the user corrects anything, update the mission model and `mission.md` before continuing.
+
 ## Domain playbook 
 
 After investigation, you must read the relevant domain playbook skills, selected from:
@@ -241,6 +245,10 @@ Before `submit_plan`, check task coverage:
 - every target is sealed by a gate or playbook-defined closure path;
 - no user-facing acceptance promise exists only inside a task body, skill, report, or assumption;
 - no broad task grouping hides scope shrinkage, missing evidence, duplicate ownership, or ambiguous failure diagnosis.
+
+Before calling `submit_plan`, show the user the final planning summary and ask for confirmation. Include: contract assertion groups, major work tasks, validation lanes, dependencies/order, expected user-visible outcome, known risks, and any accepted non-goals or scope cuts.
+
+Do not call `submit_plan` until the user confirms the task plan, unless the user explicitly asked the orchestrator to proceed without further confirmation. If the user changes scope, validation expectations, priority, or risk tolerance, update `mission.md`, contract files, and task topology before submitting.
 
 ## Task Ordering And Shared State
 

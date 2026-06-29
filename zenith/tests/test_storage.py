@@ -88,6 +88,19 @@ class TestProjectLifecycle:
             harness_home / "projects" / "p1" / ".zenith" / "AGENTS.md"
         ).resolve()
 
+    def test_existing_workspace_agents_md_is_preserved(
+        self, store: ProjectStore, workspace: Path
+    ) -> None:
+        agents_md = workspace / "AGENTS.md"
+        agents_md.write_text("# User project guidance\n\nKeep this.\n")
+
+        store.create_project("brief", workspace, project_id="p1")
+        store.sync_workspace_skill_surfaces("p1")
+
+        assert agents_md.is_file()
+        assert not agents_md.is_symlink()
+        assert agents_md.read_text() == "# User project guidance\n\nKeep this.\n"
+
     @pytest.mark.parametrize("host", [".agents", ".claude", ".codex"])
     def test_existing_host_skills_dir_is_merged(
         self, store: ProjectStore, workspace: Path, host: str
@@ -106,6 +119,29 @@ class TestProjectLifecycle:
             "# Project skill\n"
         )
         assert (skills_dir / "scrutiny-validator" / "SKILL.md").exists()
+
+    def test_sync_workspace_skill_surfaces_updates_preserved_host_dir(
+        self, store: ProjectStore, workspace: Path
+    ) -> None:
+        skills_dir = workspace / ".codex" / "skills"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "project-skill" / "SKILL.md").parent.mkdir()
+        (skills_dir / "project-skill" / "SKILL.md").write_text("# Project skill\n")
+
+        store.create_project("brief", workspace, project_id="p1")
+        bucket_skill = store.zenith_dir("p1") / "skills" / "new-worker" / "SKILL.md"
+        bucket_skill.parent.mkdir(parents=True)
+        bucket_skill.write_text("# New worker\n")
+
+        assert skills_dir.is_dir()
+        assert not skills_dir.is_symlink()
+        assert not (skills_dir / "new-worker" / "SKILL.md").exists()
+
+        store.sync_workspace_skill_surfaces("p1")
+
+        assert skills_dir.is_dir()
+        assert not skills_dir.is_symlink()
+        assert (skills_dir / "new-worker" / "SKILL.md").read_text() == "# New worker\n"
 
     @pytest.mark.parametrize("host", [".agents", ".claude", ".codex"])
     def test_bootstrap_host_skills_dir_becomes_bucket_symlink(

@@ -1,8 +1,3 @@
-"""Factories for runtime attention events.
-
-The public attention surface is intentionally just `id + report`. Runtime-only
-metadata stays on AttentionItemInternal so decisions can still be applied.
-"""
 from __future__ import annotations
 
 import secrets

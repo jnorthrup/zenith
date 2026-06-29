@@ -244,6 +244,21 @@ class ProjectStore:
             record.model_dump(mode="json"),
         )
 
+    def sync_workspace_skill_surfaces(self, project_id: str) -> None:
+        """Refresh workspace-native skill dirs from the project skill bucket.
+
+        Real user-authored host skill directories are preserved; missing bucket
+        skills are copied into them. Bootstrap-only host skill directories are
+        still converted to symlinks by the same rules used at project creation.
+        """
+        record = self.load_project(project_id)
+        ws = Path(record.workspace_dir).expanduser().resolve()
+        zenith = self.zenith_dir(project_id)
+        target_skills = zenith / "skills"
+        self._import_workspace_skills(ws, target_skills)
+        self._seed_bundled_skills(target_skills)
+        self._ensure_symlink_shims(ws, zenith)
+
     def list_projects(self) -> list[ProjectRecord]:
         if not self.config.projects_dir.exists():
             return []
@@ -654,9 +669,9 @@ class ProjectStore:
         - `<ws>/.codex/skills`  → `<zenith>/skills`
         - `<ws>/AGENTS.md`      → `<zenith>/AGENTS.md`
 
-        Idempotent: re-running retargets dangling symlinks to the current
-        bucket but never overwrites a real file or a user-aimed symlink that
-        already points at a different target with content.
+        Idempotent: skill surfaces are merged or retargeted by
+        `_ensure_skills_surface`; `AGENTS.md` is created only when the
+        workspace does not already have one.
         """
         target_skills = zenith / "skills"
         target_agents_md = zenith / "AGENTS.md"
@@ -665,7 +680,7 @@ class ProjectStore:
             host_dir = workspace / host
             host_dir.mkdir(parents=True, exist_ok=True)
             self._ensure_skills_surface(host_dir / "skills", target_skills)
-        self._safe_symlink(workspace / "AGENTS.md", target_agents_md)
+        self._ensure_agents_surface(workspace / "AGENTS.md", target_agents_md)
 
     def _ensure_skills_surface(self, link: Path, target: Path) -> None:
         """Expose aggregate bucket skills without replacing real repo skill dirs."""
@@ -689,6 +704,15 @@ class ProjectStore:
                     return
                 self._copy_missing_tree(target_abs, link)
             return
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target_abs)
+
+    @staticmethod
+    def _ensure_agents_surface(link: Path, target: Path) -> None:
+        """Create the AGENTS.md shim only when the workspace has no AGENTS.md."""
+        if os.path.lexists(link):
+            return
+        target_abs = target.resolve() if target.exists() else target
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to(target_abs)
 
@@ -724,43 +748,6 @@ class ProjectStore:
                 continue
             return False
         return True
-
-    @staticmethod
-    def _safe_symlink(link: Path, target: Path) -> None:
-        """Create `link` → `target` if safe.
-
-        Rules:
-        - If `link` is already a symlink pointing at `target` → no-op.
-        - If `link` is a dangling symlink (target missing) → retarget to
-          `target` (per AC13).
-        - If `link` is a symlink pointing elsewhere with a live target → leave
-          alone (respect user choice).
-        - If `link` is a regular file or directory → leave alone (do not
-          overwrite user content).
-        - Otherwise create the symlink.
-
-        Targets are stored as absolute paths since the bucket may live on a
-        different filesystem from the workspace.
-        """
-        target_abs = target.resolve() if target.exists() else target
-        if link.is_symlink():
-            try:
-                # Dangling: pointer exists but target does not — retarget.
-                if not link.exists():
-                    link.unlink()
-                    link.symlink_to(target_abs)
-                    return
-                if link.resolve() == target_abs:
-                    return
-                # Live symlink elsewhere — respect user choice.
-                return
-            except OSError:
-                return
-        if link.exists():
-            # Real file or directory — do not overwrite.
-            return
-        link.parent.mkdir(parents=True, exist_ok=True)
-        link.symlink_to(target_abs)
 
     # ------------------------------------------------------------------
     # Internal helpers

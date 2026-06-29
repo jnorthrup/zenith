@@ -140,6 +140,48 @@ class TestHappyPath:
         env = controller.end_mission(pid)
         assert env.state.state == "done"
 
+    def test_advance_syncs_bucket_skill_to_real_host_dir_before_dispatch(
+        self, config: HarnessConfig, workspace: Path
+    ) -> None:
+        codex_skills = workspace / ".codex" / "skills"
+        codex_skills.mkdir(parents=True)
+        (codex_skills / "user-skill" / "SKILL.md").parent.mkdir()
+        (codex_skills / "user-skill" / "SKILL.md").write_text("# User skill\n")
+
+        saw_synced_skill = False
+
+        def responder(req: DispatchRequest) -> NodeHandoff:
+            nonlocal saw_synced_skill
+            saw_synced_skill = (
+                codex_skills / "new-worker" / "SKILL.md"
+            ).exists()
+            return WorkHandoff(node_id=req.task.id, done=True, report="ok")
+
+        controller = ProjectController(
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
+        )
+        pid = _seed_project(controller, workspace)
+        bucket_skill = (
+            controller.store.zenith_dir(pid)
+            / "skills"
+            / "new-worker"
+            / "SKILL.md"
+        )
+        bucket_skill.parent.mkdir(parents=True)
+        bucket_skill.write_text("# New worker\n")
+
+        controller.submit_plan(
+            pid,
+            TaskList(tasks=[_task("w1", "work", ["VAL-001"], skill="new-worker")]),
+        )
+        controller.advance_project(pid, max_steps=1)
+
+        assert saw_synced_skill
+        assert codex_skills.is_dir()
+        assert not codex_skills.is_symlink()
+
 
 class TestNodeFailedFlow:
     def test_work_failure_raises_attention(

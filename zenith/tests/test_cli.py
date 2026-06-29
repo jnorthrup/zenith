@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,18 @@ def env(harness_home: Path, workspace: Path, monkeypatch) -> dict[str, str]:
     monkeypatch.setenv("ZENITH_HOME", str(harness_home))
     monkeypatch.chdir(workspace)
     return {"ZENITH_HOME": str(harness_home)}
+
+
+def _expected_mcp_server_args() -> list[str]:
+    zenith_root = Path(__file__).resolve().parents[1]
+    return [
+        "run",
+        "--project",
+        str(zenith_root),
+        "zenith-server",
+        "--mode",
+        "orchestrator",
+    ]
 
 
 class TestInit:
@@ -41,6 +54,9 @@ class TestInit:
         assert (workspace / ".mcp.json").exists()
         mcp = json.loads((workspace / ".mcp.json").read_text())
         assert "zenith" in mcp["mcpServers"]
+        server = mcp["mcpServers"]["zenith"]
+        assert server["command"] == "uv"
+        assert server["args"] == _expected_mcp_server_args()
 
     def test_init_does_not_touch_gitignore(
         self, runner: CliRunner, workspace: Path, env: dict[str, str]
@@ -70,7 +86,15 @@ class TestInit:
     ) -> None:
         r = runner.invoke(cli, ["init", "--workspace-dir", str(workspace), "--agent", "codex"])
         assert r.exit_code == 0, r.output
-        assert (workspace / ".codex" / "config.toml").exists()
+        config_path = workspace / ".codex" / "config.toml"
+        assert config_path.exists()
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        server = config["mcp_servers"]["zenith"]
+        assert server["command"] == "uv"
+        assert server["args"] == _expected_mcp_server_args()
+        assert f"Initialized v5 project workspace at {workspace}" in r.output
+        assert "Start your agent from the initialized project workspace" in r.output
+        assert "Read .codex/orchestrator_prompt.md and use Zenith to run this mission." in r.output
 
     def test_claude_init_writes_runtime_validator_env_names(
         self, runner: CliRunner, workspace: Path, env: dict[str, str]

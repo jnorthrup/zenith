@@ -1,18 +1,3 @@
-"""v5 ACP runner — spawns ACP agent subprocesses for nodes + terminal review.
-
-See docs/v5/07-runtime-architecture.md §5-§6 and 10-implementation-plan §2 (Phase 5).
-
-The runner:
-1. Picks a free localhost port for the worker MCP server.
-2. Computes the handoff path up-front (`<bucket>/.zenith-runtime/missions/<mid>/attempts/<spawn_ts>__<node>.json`).
-3. Spawns the worker MCP server with ZENITH_HANDOFF_PATH + ZENITH_NODE_TYPE env.
-4. Spawns the ACP agent with .mcp.json pointing at the worker MCP server.
-5. Polls the handoff path; processes when the file appears.
-6. Synthesizes a failure handoff if the agent exits without writing.
-
-The 3-process structure (coordinator + worker MCP server subprocess + ACP
-agent subprocess) is preserved for structural tool-surface isolation.
-"""
 from __future__ import annotations
 
 import asyncio

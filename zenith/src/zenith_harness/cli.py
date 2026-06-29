@@ -19,15 +19,6 @@ from .providers import (
 )
 from .storage import ProjectStore
 
-
-ORCHESTRATOR_REMINDER = (
-    "<system-reminder>REMINDER: You are the zenith orchestrator. You PLAN, DECIDE, "
-    "and AUDIT. You do NOT implement code yourself — call advance_project, "
-    "end_mission, and decide_attention to drive workers, request closeout, and "
-    "respond to attention items. Authoritative "
-    "state is on disk; trust inspect_project and Read over session memory.</system-reminder>\n\n"
-)
-
 MCP_ENV_FORWARD_ALLOWLIST = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -125,7 +116,8 @@ def init(
         _setup_provider_assets(workspace, loader, provider)
 
     click.echo(
-        f"\nInitialized v5 workspace: orchestrator={selection.orchestrator.name}, "
+        f"\nInitialized v5 project workspace at {workspace}: "
+        f"orchestrator={selection.orchestrator.name}, "
         f"worker={selection.worker.name}, "
         f"validator={selection.resolved_validation_worker.name}."
     )
@@ -133,7 +125,7 @@ def init(
         "Bucket lives at $ZENITH_HOME/projects/<pid>/ — created on the first "
         "`start_project(brief, workspace_dir)` call."
     )
-    click.echo("Next: start your host agent and call `start_project(brief, workspace_dir)`.")
+    _echo_next_steps(selection.orchestrator)
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +260,21 @@ def _copy_skills(loader: AssetLoader, target: Path) -> None:
         shutil.copy2(skill_dir / "SKILL.md", dest / "SKILL.md")
 
 
+def _echo_next_steps(orchestrator: ProviderDefinition) -> None:
+    prompt_path = orchestrator.orchestrator_prompt_output_path
+    click.echo("")
+    click.echo("Next:")
+    click.echo("  1. Start your agent from the initialized project workspace:")
+    click.echo(f"     {orchestrator.name}")
+    if prompt_path:
+        click.echo("  2. Ask it:")
+        click.echo(
+            f"     First Read the {prompt_path} and treat it as your primary role, then use Zenith to run this mission."
+        )
+        click.echo("")
+        click.echo("     <your instruction or query>")
+
+
 def _resolve_selection(
     *,
     agent: str | None,
@@ -312,6 +319,36 @@ def _forwarded_mcp_env() -> dict[str, str]:
     }
 
 
+def _zenith_project_root() -> Path:
+    """Return the source checkout that owns the Zenith runtime uv project."""
+    start = Path(__file__).resolve()
+    for candidate in (start.parent, *start.parents):
+        pyproject = candidate / "pyproject.toml"
+        if not pyproject.exists():
+            continue
+        try:
+            text = pyproject.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if 'name = "zenith-harness"' in text:
+            return candidate
+    raise click.ClickException(
+        "Could not locate the Zenith uv project root. Run `zenith init` from a "
+        "Zenith source checkout with pyproject.toml available."
+    )
+
+
+def _mcp_server_args() -> list[str]:
+    return [
+        "run",
+        "--project",
+        str(_zenith_project_root()),
+        "zenith-server",
+        "--mode",
+        "orchestrator",
+    ]
+
+
 def _write_bootstrap_config(
     workspace: Path,
     selection: ProviderSelection,
@@ -319,6 +356,7 @@ def _write_bootstrap_config(
 ) -> None:
     fmt = selection.orchestrator.config_format
     env = {**selection.env(), **storage_env}
+    server_args = _mcp_server_args()
     if fmt == "mcp_json":
         env = {**env, **_forwarded_mcp_env()}
         path = workspace / ".mcp.json"
@@ -328,7 +366,7 @@ def _write_bootstrap_config(
         existing.setdefault("mcpServers", {})["zenith"] = {
             "type": "stdio",
             "command": "uv",
-            "args": ["run", "zenith-server", "--mode", "orchestrator"],
+            "args": server_args,
             "env": env,
         }
         path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
@@ -346,7 +384,7 @@ def _write_bootstrap_config(
             "# BEGIN zenith\n"
             "[mcp_servers.zenith]\n"
             'command = "uv"\n'
-            'args = ["run", "zenith-server", "--mode", "orchestrator"]\n'
+            f"args = {json.dumps(server_args)}\n"
             "startup_timeout_sec = 10\n"
             "tool_timeout_sec = 1000000\n"
             "\n"
@@ -404,7 +442,7 @@ def _setup_provider_assets(
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             body = loader.load_prompt_file("orchestrator", "system_prompt.md")
-            path.write_text(ORCHESTRATOR_REMINDER + body, encoding="utf-8")
+            path.write_text(body, encoding="utf-8")
             click.echo(f"Created {path}")
 
 
