@@ -111,6 +111,9 @@ class AssetLoader:
         """Per-provider subagents directory (`bundled/providers/<name>/agents/`)."""
         return self.config.bundled_dir / "providers" / provider_name / "agents"
 
+    def bundled_prompts_dir(self) -> Path:
+        return self.config.bundled_dir / "prompts"
+
     def _iter_skill_dirs(
         self, project_id: str | None
     ) -> list[tuple[Literal["project", "personal", "bundled"], Path]]:

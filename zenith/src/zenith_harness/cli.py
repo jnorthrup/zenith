@@ -442,6 +442,11 @@ def _setup_provider_assets(
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             body = loader.load_prompt_file("orchestrator", "system_prompt.md")
+            # Append Hermes-specific addendum for Hermes provider
+            if provider.name == "hermes":
+                addendum_path = loader.bundled_prompts_dir() / "orchestrator" / "hermes_addendum.md"
+                if addendum_path.exists():
+                    body += "\n\n---\n\n" + addendum_path.read_text(encoding="utf-8")
             path.write_text(body, encoding="utf-8")
             click.echo(f"Created {path}")
 
