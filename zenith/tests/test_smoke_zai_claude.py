@@ -71,9 +71,9 @@ def test_zai_claude_code_smoke(workspace: Path, harness_home: Path) -> None:
     )
     assert result.exit_code == 0, result.output
 
-    mcp_env = json.loads((workspace / ".mcp.json").read_text(encoding="utf-8"))[
-        "mcpServers"
-    ]["zenith"]["env"]
+    mcp_env = json.loads((workspace / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"][
+        "zenith"
+    ]["env"]
     assert mcp_env["ANTHROPIC_BASE_URL"] == base_url
     assert mcp_env["ANTHROPIC_MODEL"] == model
     assert hmac.compare_digest(mcp_env.get("ANTHROPIC_AUTH_TOKEN", ""), api_key)

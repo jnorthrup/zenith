@@ -6,6 +6,7 @@ Every function returns `list[ValidationError]`. The caller assembles errors
 into the response payload. All checks operate on pure data — no I/O —
 except `parse_contract_dir` which lists a directory.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,9 +45,7 @@ def parse_contract_dir(contract_dir: str | Path) -> tuple[set[str], list[Validat
     """
     path = Path(contract_dir)
     if not path.exists() or not path.is_dir():
-        return set(), [
-            ValidationError("contract_dir_missing", str(path))
-        ]
+        return set(), [ValidationError("contract_dir_missing", str(path))]
 
     ids: set[str] = set()
     errors: list[ValidationError] = []
@@ -63,9 +62,7 @@ def parse_contract_dir(contract_dir: str | Path) -> tuple[set[str], list[Validat
             )
             continue
         if stem in ids:
-            errors.append(
-                ValidationError("duplicate_assertion_filename", stem)
-            )
+            errors.append(ValidationError("duplicate_assertion_filename", stem))
             continue
         ids.add(stem)
     return ids, errors

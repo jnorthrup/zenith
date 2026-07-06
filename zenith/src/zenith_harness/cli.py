@@ -67,9 +67,15 @@ def cli() -> None:
     default=None,
 )
 @click.option("--worker-acp-command", default=None)
-@click.option("--validator-provider", type=click.Choice(provider_names_for_role("worker")), default=None)
+@click.option(
+    "--validator-provider", type=click.Choice(provider_names_for_role("worker")), default=None
+)
 @click.option("--validator-acp-command", default=None)
-@click.option("--terminal-reviewer-provider", type=click.Choice(provider_names_for_role("worker")), default=None)
+@click.option(
+    "--terminal-reviewer-provider",
+    type=click.Choice(provider_names_for_role("worker")),
+    default=None,
+)
 @click.option("--terminal-reviewer-acp-command", default=None)
 @click.option("--zenith-home", type=click.Path(), default=None)
 @click.option("--workspace-dir", "workspace_dir", type=click.Path(exists=True), default=".")
@@ -289,7 +295,11 @@ def _resolve_selection(
     if agent and orchestrator and agent != orchestrator:
         raise click.UsageError("--agent conflicts with --orchestrator-provider")
     orch = orchestrator or agent or "claude"
-    wrk = worker or (agent if agent in provider_names_for_role("worker") else None) or default_worker_provider_name(orch)
+    wrk = (
+        worker
+        or (agent if agent in provider_names_for_role("worker") else None)
+        or default_worker_provider_name(orch)
+    )
     return ProviderSelection(
         orchestrator=get_provider(orch),
         worker=get_provider(wrk),
@@ -312,11 +322,7 @@ def _storage_env(
 
 
 def _forwarded_mcp_env() -> dict[str, str]:
-    return {
-        key: value
-        for key in MCP_ENV_FORWARD_ALLOWLIST
-        if (value := os.environ.get(key))
-    }
+    return {key: value for key in MCP_ENV_FORWARD_ALLOWLIST if (value := os.environ.get(key))}
 
 
 def _zenith_project_root() -> Path:
@@ -360,9 +366,7 @@ def _write_bootstrap_config(
     if fmt == "mcp_json":
         env = {**env, **_forwarded_mcp_env()}
         path = workspace / ".mcp.json"
-        existing = (
-            json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-        )
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
         existing.setdefault("mcpServers", {})["zenith"] = {
             "type": "stdio",
             "command": "uv",
@@ -379,8 +383,8 @@ def _write_bootstrap_config(
             'model = "gpt-5.5"\n'
             'sandbox_mode = "danger-full-access"\n'
             'model_reasoning_effort = "xhigh"\n'
-            '[features]\n'
-            'memories = true\n'
+            "[features]\n"
+            "memories = true\n"
             "# BEGIN zenith\n"
             "[mcp_servers.zenith]\n"
             'command = "uv"\n'
@@ -424,9 +428,7 @@ def _setup_provider_assets(
 ) -> None:
     if provider.agent_output_dir:
         agents_dir = workspace / provider.agent_output_dir
-        _copy_provider_agents(
-            loader, agents_dir, provider.name
-        )
+        _copy_provider_agents(loader, agents_dir, provider.name)
         click.echo(f"Installed {provider.name} subagents to {agents_dir}")
     # Install bundled skills into the host-agent skill surface so the
     # orchestrator can discover playbooks/skills at startup — `start_project`

@@ -2,6 +2,7 @@
 
 See docs/v5/10-implementation-plan.md §2 Phase 7.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -46,8 +47,13 @@ def config(harness_home: Path) -> HarnessConfig:
     )
 
 
-def _task(tid: str, ttype: str, targets: list[str], skill: str | None = None,
-          depends_on: list[str] | None = None) -> Task:
+def _task(
+    tid: str,
+    ttype: str,
+    targets: list[str],
+    skill: str | None = None,
+    depends_on: list[str] | None = None,
+) -> Task:
     if skill is None and ttype != "gate":
         skill = "s"
     return Task(
@@ -61,16 +67,16 @@ def _task(tid: str, ttype: str, targets: list[str], skill: str | None = None,
 
 
 def _simple_tl() -> TaskList:
-    return TaskList(tasks=[
-        _task("w1", "work", ["VAL-001"]),
-        _task("v1", "validate", ["VAL-001"], skill="aud", depends_on=["w1"]),
-        _task("g1", "gate", ["VAL-001"], depends_on=["v1"]),
-    ])
+    return TaskList(
+        tasks=[
+            _task("w1", "work", ["VAL-001"]),
+            _task("v1", "validate", ["VAL-001"], skill="aud", depends_on=["w1"]),
+            _task("g1", "gate", ["VAL-001"], depends_on=["v1"]),
+        ]
+    )
 
 
-def _start_and_seed_contract(
-    controller: ProjectController, workspace: Path
-) -> str:
+def _start_and_seed_contract(controller: ProjectController, workspace: Path) -> str:
     """Run start_project, then seed mission-001 contract VAL-001 inside the bucket."""
     controller.start_project("brief", str(workspace))
     pid = controller.store.list_projects()[0].id
@@ -92,9 +98,7 @@ def _responder(req: DispatchRequest) -> NodeHandoff:
 
 
 class TestCleanReview:
-    def test_clean_review_seals_done(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_clean_review_seals_done(self, config: HarnessConfig, workspace: Path) -> None:
         controller = ProjectController(
             config,
             MockDispatcher(_responder),
@@ -105,9 +109,7 @@ class TestCleanReview:
         # First advance: gate_checkpoint
         env = controller.advance_project(pid)
         items = controller.store.load_attention(pid)
-        controller.decide_attention(
-            pid, [Decision(item_id=items[0].id, action="continue")]
-        )
+        controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
         env = controller.advance_project(pid)
         assert env.state.state == "mission_running"
         env = controller.end_mission(pid)
@@ -138,9 +140,7 @@ class TestGapsTransition:
         env = controller.advance_project(pid)
         assert env.state.state == "attention_needed"
         items = controller.store.load_attention(pid)
-        controller.decide_attention(
-            pid, [Decision(item_id=items[0].id, action="continue")]
-        )
+        controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
         env = controller.advance_project(pid)
         assert env.state.state == "mission_running"
         controller.end_mission(pid)
@@ -148,18 +148,14 @@ class TestGapsTransition:
         assert review_dir.exists() and any(review_dir.iterdir())
         # Resolve via next_mission
         items = controller.store.load_attention(pid)
-        controller.decide_attention(
-            pid, [Decision(item_id=items[0].id, action="next_mission")]
-        )
+        controller.decide_attention(pid, [Decision(item_id=items[0].id, action="next_mission")])
         # mission-002 should be the new current mission
         record = ProjectStore(config).load_project(pid)
         assert record.current_mission_id == "mission-002"
 
 
 class TestAbortRoundtripFromTerminalReview:
-    def test_abort_via_decision(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_abort_via_decision(self, config: HarnessConfig, workspace: Path) -> None:
         reviewer = MockTerminalReviewer(
             TerminalReviewHandoff(done=False, report="blocking gap: x\nbrief: y")
         )
@@ -169,9 +165,7 @@ class TestAbortRoundtripFromTerminalReview:
         env = controller.advance_project(pid)
         assert env.state.state == "attention_needed"
         items = controller.store.load_attention(pid)
-        controller.decide_attention(
-            pid, [Decision(item_id=items[0].id, action="continue")]
-        )
+        controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
         env = controller.advance_project(pid)
         assert env.state.state == "mission_running"
         controller.end_mission(pid)

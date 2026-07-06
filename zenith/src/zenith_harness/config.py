@@ -1,4 +1,5 @@
 """v5 HarnessConfig. See specs/memory_v2/PRODUCT.md for layout."""
+
 from __future__ import annotations
 
 import os
@@ -59,29 +60,21 @@ class HarnessConfig:
                 "bucket is always $ZENITH_HOME/projects/<pid>/. Unset the env var."
             )
         harness_home = (
-            Path(os.environ.get("ZENITH_HOME") or (Path.home() / ".zenith"))
-            .expanduser()
-            .resolve()
+            Path(os.environ.get("ZENITH_HOME") or (Path.home() / ".zenith")).expanduser().resolve()
         )
         projects_dir = (
             _resolve_optional_path(os.environ.get("ZENITH_PROJECTS_DIR"))
             or harness_home / "projects"
         )
-        orchestrator_provider_name = os.environ.get(
-            "ZENITH_ORCHESTRATOR_PROVIDER", "claude"
-        )
+        orchestrator_provider_name = os.environ.get("ZENITH_ORCHESTRATOR_PROVIDER", "claude")
         worker_provider_name = os.environ.get(
             "ZENITH_WORKER_PROVIDER"
         ) or default_worker_provider_name(orchestrator_provider_name)
         worker_acp_command = os.environ.get("ZENITH_WORKER_ACP_COMMAND")
         validator_provider_name = os.environ.get("ZENITH_VALIDATOR_PROVIDER")
         validator_acp_command = os.environ.get("ZENITH_VALIDATOR_ACP_COMMAND")
-        terminal_reviewer_provider_name = os.environ.get(
-            "ZENITH_TERMINAL_REVIEWER_PROVIDER"
-        )
-        terminal_reviewer_acp_command = os.environ.get(
-            "ZENITH_TERMINAL_REVIEWER_ACP_COMMAND"
-        )
+        terminal_reviewer_provider_name = os.environ.get("ZENITH_TERMINAL_REVIEWER_PROVIDER")
+        terminal_reviewer_acp_command = os.environ.get("ZENITH_TERMINAL_REVIEWER_ACP_COMMAND")
         return cls(
             bundled_dir=_bundled_dir(),
             harness_home=harness_home,
@@ -93,9 +86,7 @@ class HarnessConfig:
             validator_acp_command=validator_acp_command,
             terminal_reviewer_provider_name=terminal_reviewer_provider_name,
             terminal_reviewer_acp_command=terminal_reviewer_acp_command,
-            max_parallel_nodes=_resolve_max_parallel(
-                os.environ.get("ZENITH_MAX_PARALLEL_NODES")
-            ),
+            max_parallel_nodes=_resolve_max_parallel(os.environ.get("ZENITH_MAX_PARALLEL_NODES")),
         )
 
     # ------------------------------------------------------------------
@@ -148,11 +139,7 @@ class HarnessConfig:
         return ProviderSelection(
             orchestrator=self.orchestrator_provider,
             worker=self.worker_provider,
-            validation_worker=(
-                self.validator_provider
-                if self.validator_provider_name
-                else None
-            ),
+            validation_worker=(self.validator_provider if self.validator_provider_name else None),
             worker_acp_command=self.worker_acp_command,
             validation_worker_acp_command=self.validator_acp_command,
         )
@@ -185,17 +172,13 @@ class HarnessConfig:
     # Role-specialized variants
     # ------------------------------------------------------------------
 
-    def for_role(
-        self, role: Literal["worker", "validator", "terminal_reviewer"]
-    ) -> HarnessConfig:
+    def for_role(self, role: Literal["worker", "validator", "terminal_reviewer"]) -> HarnessConfig:
         if role == "worker":
             return self
         if role == "validator":
             return replace(
                 self,
-                worker_provider_name=(
-                    self.validator_provider_name or self.worker_provider_name
-                ),
+                worker_provider_name=(self.validator_provider_name or self.worker_provider_name),
                 worker_acp_command=self.resolved_validator_acp_command,
             )
         if role == "terminal_reviewer":

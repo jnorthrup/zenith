@@ -1,4 +1,5 @@
 """Submit-time task-list validation. See `specs/task_list/PRODUCT.md`."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -58,10 +59,12 @@ class TestParseContractDir:
 
 class TestTaskIds:
     def test_duplicate_task_id(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"]),
-            _task("w1", "work", ["Y"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"]),
+                _task("w1", "work", ["Y"]),
+            ]
+        )
         errs = check_task_ids(tl)
         assert any(e.code == "duplicate_task_id" for e in errs)
 
@@ -74,30 +77,26 @@ class TestTaskIds:
 class TestTaskShape:
     def test_gate_with_skill_rejected(self) -> None:
         # Bypass the helper to construct a malformed gate.
-        tl = TaskList(tasks=[
-            Task(id="g1", type="gate", body="", targets=["X"], skill="some-skill")
-        ])
+        tl = TaskList(
+            tasks=[Task(id="g1", type="gate", body="", targets=["X"], skill="some-skill")]
+        )
         errs = check_task_shape(tl)
         assert any(e.code == "gate_with_skill" for e in errs)
 
     def test_gate_with_body_rejected(self) -> None:
-        tl = TaskList(tasks=[
-            Task(id="g1", type="gate", body="must be empty", targets=["X"], skill=None)
-        ])
+        tl = TaskList(
+            tasks=[Task(id="g1", type="gate", body="must be empty", targets=["X"], skill=None)]
+        )
         errs = check_task_shape(tl)
         assert any(e.code == "gate_with_body" for e in errs)
 
     def test_work_without_skill_rejected(self) -> None:
-        tl = TaskList(tasks=[
-            Task(id="w1", type="work", body="b", targets=["X"], skill=None)
-        ])
+        tl = TaskList(tasks=[Task(id="w1", type="work", body="b", targets=["X"], skill=None)])
         errs = check_task_shape(tl)
         assert any(e.code == "non_gate_without_skill" for e in errs)
 
     def test_work_without_body_rejected(self) -> None:
-        tl = TaskList(tasks=[
-            Task(id="w1", type="work", body="", targets=["X"], skill="s")
-        ])
+        tl = TaskList(tasks=[Task(id="w1", type="work", body="", targets=["X"], skill="s")])
         errs = check_task_shape(tl)
         assert any(e.code == "missing_body" for e in errs)
 
@@ -119,42 +118,52 @@ class TestTaskShape:
 
 class TestDepsResolve:
     def test_dep_unknown_task(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"], depends_on=["ghost"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"], depends_on=["ghost"]),
+            ]
+        )
         errs = check_deps_resolve(tl)
         assert any(e.code == "dep_unknown_task" for e in errs)
 
     def test_self_loop(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"], depends_on=["w1"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"], depends_on=["w1"]),
+            ]
+        )
         errs = check_deps_resolve(tl)
         assert any(e.code == "self_loop" for e in errs)
 
 
 class TestAcyclic:
     def test_acyclic(self) -> None:
-        tl = TaskList(tasks=[
-            _task("a", "work", ["X"]),
-            _task("b", "work", ["Y"], depends_on=["a"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("a", "work", ["X"]),
+                _task("b", "work", ["Y"], depends_on=["a"]),
+            ]
+        )
         assert check_acyclic(tl) == []
 
     def test_mutual_cycle(self) -> None:
-        tl = TaskList(tasks=[
-            _task("a", "work", ["X"], depends_on=["b"]),
-            _task("b", "work", ["Y"], depends_on=["a"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("a", "work", ["X"], depends_on=["b"]),
+                _task("b", "work", ["Y"], depends_on=["a"]),
+            ]
+        )
         errs = check_acyclic(tl)
         assert any(e.code == "cycle_detected" for e in errs)
 
     def test_transitive_cycle(self) -> None:
-        tl = TaskList(tasks=[
-            _task("a", "work", ["X"], depends_on=["c"]),
-            _task("b", "work", ["Y"], depends_on=["a"]),
-            _task("c", "work", ["Z"], depends_on=["b"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("a", "work", ["X"], depends_on=["c"]),
+                _task("b", "work", ["Y"], depends_on=["a"]),
+                _task("c", "work", ["Z"], depends_on=["b"]),
+            ]
+        )
         errs = check_acyclic(tl)
         assert any(e.code == "cycle_detected" for e in errs)
 
@@ -166,10 +175,12 @@ class TestCoverage:
         assert any(e.code == "uncovered_assertion" for e in errs)
 
     def test_over_covered(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"]),
-            _task("w2", "work", ["X"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"]),
+                _task("w2", "work", ["X"]),
+            ]
+        )
         errs = check_coverage({"X"}, tl)
         assert any(e.code == "over_covered_assertion" for e in errs)
 
@@ -181,11 +192,13 @@ class TestCoverage:
 
 class TestValidateSubmission:
     def test_full_pipeline_clean(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"]),
-            _task("v1", "validate", ["X"], skill="aud", depends_on=["w1"]),
-            _task("g1", "gate", ["X"], depends_on=["v1"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"]),
+                _task("v1", "validate", ["X"], skill="aud", depends_on=["w1"]),
+                _task("g1", "gate", ["X"], depends_on=["v1"]),
+            ]
+        )
         assert validate_task_list_submission({"X"}, tl) == []
 
     def test_empty_task_list_rejected(self) -> None:
@@ -194,8 +207,10 @@ class TestValidateSubmission:
         assert errs and errs[0].code == "empty_task_list"
 
     def test_validator_requires_targets(self) -> None:
-        tl = TaskList(tasks=[
-            _task("v1", "validate", []),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("v1", "validate", []),
+            ]
+        )
         errs = validate_task_list_submission({"X"}, tl)
         assert errs and errs[0].code == "empty_targets"

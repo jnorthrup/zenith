@@ -1,4 +1,5 @@
 """Envelope rendering tests (task-list shape)."""
+
 from __future__ import annotations
 
 
@@ -18,16 +19,18 @@ def _build_pipeline(n_work: int) -> tuple[TaskList, TaskStateFile]:
     for i in range(n_work):
         tid = f"w{i:03d}"
         work_ids.append(tid)
-        tasks.append(
-            Task(id=tid, type="work", body="b", targets=[f"X-{i:03d}"], skill="s")
+        tasks.append(Task(id=tid, type="work", body="b", targets=[f"X-{i:03d}"], skill="s"))
+    tasks.append(
+        Task(
+            id="v1",
+            type="validate",
+            body="audit",
+            targets=target_ids,
+            skill="aud",
+            depends_on=work_ids,
         )
-    tasks.append(
-        Task(id="v1", type="validate", body="audit",
-             targets=target_ids, skill="aud", depends_on=work_ids)
     )
-    tasks.append(
-        Task(id="g1", type="gate", body="", targets=target_ids, depends_on=["v1"])
-    )
+    tasks.append(Task(id="g1", type="gate", body="", targets=target_ids, depends_on=["v1"]))
     return TaskList(tasks=tasks), TaskStateFile()
 
 
@@ -87,9 +90,7 @@ class TestRenderTaskList:
         assert "← (root)" in rendered
 
     def test_envelope_dump_fields(self) -> None:
-        env = make_envelope(
-            "proj-1", Draft(), "/tmp/.zenith", "/home/u/.zenith/projects/proj-1"
-        )
+        env = make_envelope("proj-1", Draft(), "/tmp/.zenith", "/home/u/.zenith/projects/proj-1")
         dumped = env.model_dump()
         assert set(dumped.keys()) == {
             "projectId",

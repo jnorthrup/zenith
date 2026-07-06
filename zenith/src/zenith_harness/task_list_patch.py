@@ -10,6 +10,7 @@ A patch is applied to (task_list, task_state, contract_ids) and returns
 either (patched_tl, patched_state, new_contract_ids, []) or
 (unchanged_tl, unchanged_state, unchanged_ids, errors).
 """
+
 from __future__ import annotations
 
 
@@ -35,9 +36,7 @@ def _sealed_task_ids(tl: TaskList, task_state: TaskStateFile) -> set[str]:
     every cleared gate. Sealed tasks may not be superseded or cancelled.
     """
     cleared_gates = [
-        t.id
-        for t in tl.tasks
-        if t.type == "gate" and task_state.status_of(t.id) == "cleared"
+        t.id for t in tl.tasks if t.type == "gate" and task_state.status_of(t.id) == "cleared"
     ]
     if not cleared_gates:
         return set()
@@ -183,9 +182,7 @@ def apply_patch(
     # 5. Build patched task list: append `add`, then rewrite depends_on
     # to route through supersede / drop cancelled.
     appended = list(tl.tasks) + list(patch.add)
-    rewritten = _rewrite_depends_on(
-        appended, supersede=patch.supersede, cancel=cancel_set
-    )
+    rewritten = _rewrite_depends_on(appended, supersede=patch.supersede, cancel=cancel_set)
     patched_tl = TaskList(tasks=rewritten)
 
     patched_state = TaskStateFile(tasks=dict(task_state.tasks))

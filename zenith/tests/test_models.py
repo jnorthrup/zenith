@@ -1,4 +1,5 @@
 """Unit tests for v5 schemas (task-list shape)."""
+
 from __future__ import annotations
 
 import pytest
@@ -22,7 +23,9 @@ from zenith_harness.models import (
 
 class TestTask:
     def test_minimal_work(self) -> None:
-        t = Task(id="w1", type="work", body="do it", targets=["VAL-001"], skill="api-contract-worker")
+        t = Task(
+            id="w1", type="work", body="do it", targets=["VAL-001"], skill="api-contract-worker"
+        )
         assert t.id == "w1"
         assert t.skill == "api-contract-worker"
         assert t.depends_on == []
@@ -44,8 +47,14 @@ class TestTask:
         assert t.skill is None
 
     def test_depends_on_carries_ids(self) -> None:
-        t = Task(id="v1", type="validate", body="check", targets=["X"], skill="aud",
-                 depends_on=["w1", "w2"])
+        t = Task(
+            id="v1",
+            type="validate",
+            body="check",
+            targets=["X"],
+            skill="aud",
+            depends_on=["w1", "w2"],
+        )
         assert t.depends_on == ["w1", "w2"]
 
     def test_unknown_type_rejected(self) -> None:
@@ -70,10 +79,12 @@ class TestTaskList:
         assert tl.tasks == []
 
     def test_roundtrip(self) -> None:
-        tl = TaskList(tasks=[
-            Task(id="w1", type="work", body="b", targets=["X"], skill="s"),
-            Task(id="g1", type="gate", body="", targets=["X"], depends_on=["w1"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                Task(id="w1", type="work", body="b", targets=["X"], skill="s"),
+                Task(id="g1", type="gate", body="", targets=["X"], depends_on=["w1"]),
+            ]
+        )
         dumped = tl.model_dump()
         again = TaskList.model_validate(dumped)
         assert again == tl

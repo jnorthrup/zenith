@@ -27,6 +27,7 @@ with that content. We verify:
 These tests are slow (typical wall time ~60-120s each); skip locally
 unless you're validating an ACP wiring change.
 """
+
 from __future__ import annotations
 
 import os
@@ -114,31 +115,33 @@ Do not edit any files.
 
 
 def _build_task_list() -> TaskList:
-    return TaskList(tasks=[
-        Task(
-            id="w1",
-            type="work",
-            body=WORKER_BODY,
-            targets=["VAL-HELLO-001"],
-            skill="hello-file-worker",
-        ),
-        Task(
-            id="v1",
-            type="validate",
-            body=VALIDATOR_BODY,
-            targets=["VAL-HELLO-001"],
-            skill="scrutiny-validator",
-            depends_on=["w1"],
-        ),
-        Task(
-            id="g1",
-            type="gate",
-            body="",
-            targets=["VAL-HELLO-001"],
-            skill=None,
-            depends_on=["v1"],
-        ),
-    ])
+    return TaskList(
+        tasks=[
+            Task(
+                id="w1",
+                type="work",
+                body=WORKER_BODY,
+                targets=["VAL-HELLO-001"],
+                skill="hello-file-worker",
+            ),
+            Task(
+                id="v1",
+                type="validate",
+                body=VALIDATOR_BODY,
+                targets=["VAL-HELLO-001"],
+                skill="scrutiny-validator",
+                depends_on=["w1"],
+            ),
+            Task(
+                id="g1",
+                type="gate",
+                body="",
+                targets=["VAL-HELLO-001"],
+                skill=None,
+                depends_on=["v1"],
+            ),
+        ]
+    )
 
 
 def _write_contract(workspace: Path, mission_id: str) -> None:
@@ -247,9 +250,7 @@ def test_smoke_hello_mission(
     """Drive a tiny mission end-to-end against the real ACP for `provider`."""
     config = _make_config(harness_home, provider)
     dispatcher = ACPNodeDispatcher(config)
-    controller = ProjectController(
-        config, dispatcher, _CleanTerminalReviewer()
-    )
+    controller = ProjectController(config, dispatcher, _CleanTerminalReviewer())
 
     # 1) start_project
     start_env = controller.start_project("smoke test brief", str(workspace))
@@ -272,9 +273,9 @@ def test_smoke_hello_mission(
     # second call → Done (via clean terminal reviewer).
     advance_env = controller.advance_project(pid)
     state_history.append(advance_env.state.state)
-    assert (
-        advance_env.state.state == "attention_needed"
-    ), f"expected gate_checkpoint, got state={advance_env.state.state}"
+    assert advance_env.state.state == "attention_needed", (
+        f"expected gate_checkpoint, got state={advance_env.state.state}"
+    )
 
     items = controller.store.load_attention(pid)
     assert items and items[0].kind == "gate_checkpoint", (
@@ -282,9 +283,7 @@ def test_smoke_hello_mission(
         f"report={items[0].report if items else 'n/a'}"
     )
 
-    controller.decide_attention(
-        pid, [Decision(item_id=items[0].id, action="continue")]
-    )
+    controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
 
     if time.monotonic() > deadline:
         pytest.fail(f"smoke test exceeded {_TIMEOUT_S}s before terminal review")
@@ -292,8 +291,7 @@ def test_smoke_hello_mission(
     final = controller.advance_project(pid)
     state_history.append(final.state.state)
     assert final.state.state == "done", (
-        f"expected done after terminal review, got {final.state.state}; "
-        f"history={state_history}"
+        f"expected done after terminal review, got {final.state.state}; history={state_history}"
     )
 
     # 4) Workspace artifact: hello.txt with the literal content
@@ -311,7 +309,9 @@ def test_smoke_hello_mission(
     work_attempts = list(rt_attempts.glob("*__w1.json"))
     val_attempts = list(rt_attempts.glob("*__v1.json"))
     assert work_attempts, f"no work attempt files in {rt_attempts}: {list(rt_attempts.iterdir())}"
-    assert val_attempts, f"no validate attempt files in {rt_attempts}: {list(rt_attempts.iterdir())}"
+    assert val_attempts, (
+        f"no validate attempt files in {rt_attempts}: {list(rt_attempts.iterdir())}"
+    )
 
     # ...and agent-readable MD mirrors in the durable .zenith/ record.
     durable_attempts = controller.store.attempts_dir(pid, "mission-001")
@@ -323,15 +323,11 @@ def test_smoke_hello_mission(
     # 6) Validator verdict on disk
     from zenith_harness.models import ValidateHandoff
 
-    val_handoff = ValidateHandoff.model_validate_json(
-        val_attempts[-1].read_text()
-    )
+    val_handoff = ValidateHandoff.model_validate_json(val_attempts[-1].read_text())
     assert val_handoff.passed is True, (
         f"validator did not pass: items={val_handoff.items}, report={val_handoff.report}"
     )
-    item_passed = any(
-        it.item_id == "VAL-HELLO-001" and it.passed for it in val_handoff.items
-    )
+    item_passed = any(it.item_id == "VAL-HELLO-001" and it.passed for it in val_handoff.items)
     assert item_passed, f"VAL-HELLO-001 not marked passed: items={val_handoff.items}"
 
     # 7) Closeout written
@@ -348,9 +344,7 @@ def test_smoke_hello_mission(
     not (_provider_enabled("claude") and _binary_present("claude-agent-acp")),
     reason="Set ZENITH_SMOKE_REAL_ACP=claude (or both) + install claude-agent-acp.",
 )
-def test_smoke_real_terminal_reviewer_claude(
-    workspace: Path, harness_home: Path
-):
+def test_smoke_real_terminal_reviewer_claude(workspace: Path, harness_home: Path):
     """Exercise the real terminal-review ACP path with claude-agent-acp.
 
     This is a separate test because it adds another minutes-scale LLM call.
@@ -362,15 +356,11 @@ def test_smoke_real_terminal_reviewer_claude(
     not (_provider_enabled("codex") and _binary_present("codex-acp")),
     reason="Set ZENITH_SMOKE_REAL_ACP=codex (or both) + install codex-acp.",
 )
-def test_smoke_real_terminal_reviewer_codex(
-    workspace: Path, harness_home: Path
-):
+def test_smoke_real_terminal_reviewer_codex(workspace: Path, harness_home: Path):
     _run_with_real_terminal_reviewer("codex", workspace, harness_home)
 
 
-def _run_with_real_terminal_reviewer(
-    provider: str, workspace: Path, harness_home: Path
-) -> None:
+def _run_with_real_terminal_reviewer(provider: str, workspace: Path, harness_home: Path) -> None:
     config = _make_config(harness_home, provider, use_for_terminal=True)
     dispatcher = ACPNodeDispatcher(config)
     reviewer = ACPTerminalReviewer(config)
@@ -386,9 +376,7 @@ def _run_with_real_terminal_reviewer(
     assert env.state.state == "attention_needed"
     items = controller.store.load_attention(pid)
     assert items[0].kind == "gate_checkpoint"
-    controller.decide_attention(
-        pid, [Decision(item_id=items[0].id, action="continue")]
-    )
+    controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
     if time.monotonic() > deadline:
         pytest.fail("smoke test ran out of budget before terminal review")
     final = controller.advance_project(pid)

@@ -4,6 +4,7 @@ The envelope's `dag` field carries a text view of the task list (field name
 kept for envelope-surface stability). Tool call sites choose whether to return
 no DAG, a compact frontier view, or a full active task-list view.
 """
+
 from __future__ import annotations
 
 from collections import Counter
@@ -39,10 +40,7 @@ def render_task_list(
     if mode not in {"summary", "frontier", "full"}:
         raise ValueError("mode must be 'summary', 'frontier', or 'full'")
 
-    statuses = {
-        t.id: (task_state.status_of(t.id) if task_state else "pending")
-        for t in tl.tasks
-    }
+    statuses = {t.id: (task_state.status_of(t.id) if task_state else "pending") for t in tl.tasks}
     visible = [t for t in tl.tasks if statuses[t.id] != "superseded"]
     counter = Counter(statuses[t.id] for t in tl.tasks)
     header_parts = []
@@ -86,9 +84,7 @@ def _render_summary(
     ready, blocked, running, failed, gates, last_cleared = _collect_frontier(
         ordered, preds, statuses
     )
-    lines = _frontier_header_lines(
-        header, ready, blocked, running, failed, gates, statuses
-    )
+    lines = _frontier_header_lines(header, ready, blocked, running, failed, gates, statuses)
 
     rendered = 0
     rendered += _append_group(lines, "failed", failed, preds, statuses, rendered)
@@ -97,9 +93,7 @@ def _render_summary(
 
     omitted = len(failed) + len(running) + len(ready) - rendered
     if omitted > 0:
-        lines.append(
-            f"  ... {omitted} more frontier tasks omitted; read tasks.json for full list"
-        )
+        lines.append(f"  ... {omitted} more frontier tasks omitted; read tasks.json for full list")
 
     focus = _focus_subgraph(last_cleared, ordered, preds, succs, statuses)
     if focus:
@@ -116,12 +110,8 @@ def _render_frontier(
     preds: dict[str, list[str]],
     statuses: Mapping[str, str],
 ) -> str:
-    ready, blocked, running, failed, gates, _ = _collect_frontier(
-        ordered, preds, statuses
-    )
-    lines = _frontier_header_lines(
-        header, ready, blocked, running, failed, gates, statuses
-    )
+    ready, blocked, running, failed, gates, _ = _collect_frontier(ordered, preds, statuses)
+    lines = _frontier_header_lines(header, ready, blocked, running, failed, gates, statuses)
 
     rendered = 0
     rendered += _append_group(lines, "failed", failed, preds, statuses, rendered)
@@ -130,9 +120,7 @@ def _render_frontier(
 
     omitted = len(failed) + len(running) + len(ready) - rendered
     if omitted > 0:
-        lines.append(
-            f"  ... {omitted} more frontier tasks omitted; read tasks.json for full list"
-        )
+        lines.append(f"  ... {omitted} more frontier tasks omitted; read tasks.json for full list")
     return "\n".join(lines)
 
 
@@ -155,9 +143,7 @@ def _collect_frontier(
         elif status == "running":
             running.append(task)
         elif status == "pending":
-            live_preds = [
-                p for p in preds.get(task.id, []) if statuses.get(p) != "superseded"
-            ]
+            live_preds = [p for p in preds.get(task.id, []) if statuses.get(p) != "superseded"]
             if all(statuses.get(p) == "cleared" for p in live_preds):
                 ready.append(task)
             else:
@@ -185,9 +171,7 @@ def _frontier_header_lines(
         f"ready:{len(ready)}, blocked:{blocked}"
     )
     if gates:
-        lines.append(
-            f"  gates: {_summarize_statuses(gates, statuses, limit=MAX_GATE_ROWS)}"
-        )
+        lines.append(f"  gates: {_summarize_statuses(gates, statuses, limit=MAX_GATE_ROWS)}")
     return lines
 
 
@@ -206,8 +190,7 @@ def _topological_order(
     indeg: dict[str, int] = {}
     for tid in visible_ids:
         live_preds = [
-            p for p in preds.get(tid, [])
-            if p in visible_ids and statuses.get(p) != "superseded"
+            p for p in preds.get(tid, []) if p in visible_ids and statuses.get(p) != "superseded"
         ]
         indeg[tid] = len(live_preds)
 
@@ -220,9 +203,7 @@ def _topological_order(
                 successors[p].append(tid)
 
     order_index = {t.id: i for i, t in enumerate(visible)}
-    ready: list[tuple[int, str]] = [
-        (order_index[tid], tid) for tid, d in indeg.items() if d == 0
-    ]
+    ready: list[tuple[int, str]] = [(order_index[tid], tid) for tid, d in indeg.items() if d == 0]
     ready.sort()
     result: list[Task] = []
     while ready:
@@ -267,17 +248,11 @@ def _focus_subgraph(
         return []
     by_id = {t.id: t for t in ordered}
     focus_ids: set[str] = {focus.id}
-    focus_ids.update(
-        p for p in preds.get(focus.id, []) if statuses.get(p) != "superseded"
-    )
-    focus_ids.update(
-        s for s in succs.get(focus.id, []) if statuses.get(s) != "superseded"
-    )
+    focus_ids.update(p for p in preds.get(focus.id, []) if statuses.get(p) != "superseded")
+    focus_ids.update(s for s in succs.get(focus.id, []) if statuses.get(s) != "superseded")
 
     for sid in list(succs.get(focus.id, [])):
-        focus_ids.update(
-            s for s in succs.get(sid, []) if statuses.get(s) != "superseded"
-        )
+        focus_ids.update(s for s in succs.get(sid, []) if statuses.get(s) != "superseded")
 
     result = [t for t in ordered if t.id in focus_ids and t.id in by_id]
     if len(result) <= MAX_FOCUS_ROWS:
@@ -330,9 +305,7 @@ def _summarize_ids(ids: list[str], *, empty: str = "-") -> str:
     return f"{shown},+{len(ids) - MAX_INLINE_IDS}"
 
 
-def _summarize_statuses(
-    tasks: list[Task], statuses: Mapping[str, str], *, limit: int
-) -> str:
+def _summarize_statuses(tasks: list[Task], statuses: Mapping[str, str], *, limit: int) -> str:
     shown = [f"{t.id}:{statuses[t.id]}" for t in tasks[:limit]]
     if len(tasks) > limit:
         shown.append(f"+{len(tasks) - limit}")
@@ -355,9 +328,7 @@ def make_envelope(
         projectRoot=project_root,
         harnessRoot=harness_root,
         dag=(
-            None
-            if dag_mode == "none"
-            else render_task_list(task_list, task_state, mode=dag_mode)
+            None if dag_mode == "none" else render_task_list(task_list, task_state, mode=dag_mode)
         ),
     )
 

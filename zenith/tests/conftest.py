@@ -1,4 +1,5 @@
 """Shared test fixtures for v5."""
+
 from __future__ import annotations
 
 from pathlib import Path

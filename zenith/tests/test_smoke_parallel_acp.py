@@ -16,6 +16,7 @@ Run:
 
 Gated by ZENITH_SMOKE_REAL_ACP so the default suite stays hermetic.
 """
+
 from __future__ import annotations
 
 import json
@@ -87,11 +88,18 @@ def _task_ids(n: int) -> list[str]:
 def _tasks(n: int) -> TaskList:
     # N independent work tasks, no deps -> all runnable at T+0 -> one parallel
     # batch with max_parallel_nodes=N. Forces N concurrent claude adapters.
-    return TaskList(tasks=[
-        Task(id=f"w{i}", type="work", targets=[f"VAL-{i}"], skill="noop-file-worker",
-             body=WORKER_BODY.format(fname=f"f{i}.txt", word=f"word{i}"))
-        for i in range(n)
-    ])
+    return TaskList(
+        tasks=[
+            Task(
+                id=f"w{i}",
+                type="work",
+                targets=[f"VAL-{i}"],
+                skill="noop-file-worker",
+                body=WORKER_BODY.format(fname=f"f{i}.txt", word=f"word{i}"),
+            )
+            for i in range(n)
+        ]
+    )
 
 
 class _CleanReviewer:
@@ -183,7 +191,6 @@ def _run_parallel_workspace_acp(
     for tid in _task_ids(_N):
         assert tid in reports, f"{tid} produced no handoff at all"
     failed = {t: r for t, r in reports.items() if not r.get("done")}
-    assert not failed, (
-        f"parallel {provider} worker(s) failed:\n"
-        + "\n".join(f"{t}: {r.get('report')}" for t, r in failed.items())
+    assert not failed, f"parallel {provider} worker(s) failed:\n" + "\n".join(
+        f"{t}: {r.get('report')}" for t, r in failed.items()
     )

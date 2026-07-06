@@ -1,4 +1,5 @@
 """AssetLoader tests — skill discovery and bundled agent metadata."""
+
 from __future__ import annotations
 
 import re
@@ -34,18 +35,14 @@ def loader(config: HarnessConfig) -> AssetLoader:
 
 
 class TestSkillResolution:
-    @pytest.mark.parametrize(
-        "skill_name", ["scrutiny-validator", "engineering-mission-playbook"]
-    )
+    @pytest.mark.parametrize("skill_name", ["scrutiny-validator", "engineering-mission-playbook"])
     def test_bundled_skill_loads(self, loader: AssetLoader, skill_name: str) -> None:
         s = loader.load_skill(skill_name)
         assert s.name == skill_name
         assert s.source == "bundled"
         assert s.body.strip()
 
-    def test_all_bundled_skills_have_parseable_metadata(
-        self, loader: AssetLoader
-    ) -> None:
+    def test_all_bundled_skills_have_parseable_metadata(self, loader: AssetLoader) -> None:
         for skill_name in sorted(_bundled_skill_names()):
             skill = loader.load_skill(skill_name)
             assert skill.name == skill_name
@@ -113,7 +110,7 @@ def _bundled_skill_names() -> set[str]:
 #   Prose: `skill: <name>` (single-backtick code span)
 _SKILL_REF_RE = re.compile(
     r'"skill"\s*:\s*"(?P<json>[a-z][a-z0-9-]*)"'
-    r'|`skill:\s*(?P<prose>[a-z][a-z0-9-]+)`'
+    r"|`skill:\s*(?P<prose>[a-z][a-z0-9-]+)`"
 )
 
 
@@ -137,9 +134,7 @@ class TestAssetConsistency:
             text = path.read_text()
             for name in stale_names:
                 if name in text:
-                    offenders.append(
-                        f"{path.relative_to(BUNDLED_DIR)}: contains '{name}'"
-                    )
+                    offenders.append(f"{path.relative_to(BUNDLED_DIR)}: contains '{name}'")
         assert not offenders, (
             "Bundled assets still reference removed example-* validator skills:\n"
             + "\n".join(offenders)
@@ -152,7 +147,7 @@ class TestAssetConsistency:
         patterns = (
             re.compile(r'Skill\(\s*["\']worker-base["\']'),
             re.compile(r'"skill"\s*:\s*"worker-base"'),
-            re.compile(r'`skill:\s*worker-base`'),
+            re.compile(r"`skill:\s*worker-base`"),
         )
         for path in _bundled_text_files():
             text = path.read_text()
@@ -162,9 +157,8 @@ class TestAssetConsistency:
                         f"{path.relative_to(BUNDLED_DIR)}: references removed 'worker-base'"
                     )
                     break
-        assert not offenders, (
-            "Bundled assets reference removed 'worker-base' skill:\n"
-            + "\n".join(offenders)
+        assert not offenders, "Bundled assets reference removed 'worker-base' skill:\n" + "\n".join(
+            offenders
         )
 
     def test_validator_skill_refs_resolve(self) -> None:
@@ -182,9 +176,8 @@ class TestAssetConsistency:
                     offenders.append(
                         f"{path.relative_to(BUNDLED_DIR)}: '{name}' not in bundled skills"
                     )
-        assert not offenders, (
-            "Bundled playbook references unknown validator skills:\n"
-            + "\n".join(offenders)
+        assert not offenders, "Bundled playbook references unknown validator skills:\n" + "\n".join(
+            offenders
         )
 
     def test_assertion_ids_in_examples_are_valid(self) -> None:
@@ -203,6 +196,5 @@ class TestAssetConsistency:
                             f"{path.relative_to(BUNDLED_DIR)}: invalid assertion id '{aid}'"
                         )
         assert not offenders, (
-            "Bundled playbook examples contain invalid assertion ids:\n"
-            + "\n".join(offenders)
+            "Bundled playbook examples contain invalid assertion ids:\n" + "\n".join(offenders)
         )

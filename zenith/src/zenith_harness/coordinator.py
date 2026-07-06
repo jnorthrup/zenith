@@ -4,6 +4,7 @@ See `specs/task_list/PRODUCT.md` §Dispatch. One `step()` call advances
 the state by at most one transition. The controller's `advance_project`
 tool loops `step()` until a returnable condition.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -111,9 +112,7 @@ class MissionCoordinator:
         try:
             tl = self.store.load_task_list(self.project_id, mid)
         except FileNotFoundError:
-            self.store.save_state(
-                self.project_id, Failed(reason=f"tasks.json missing for {mid}")
-            )
+            self.store.save_state(self.project_id, Failed(reason=f"tasks.json missing for {mid}"))
             return StepResult.terminal("task_list missing")
         task_state = self.store.load_task_state(self.project_id, mid)
         contract_state = self.store.load_contract_state(self.project_id, mid)
@@ -179,17 +178,13 @@ class MissionCoordinator:
     # Runnable selection (the only graph-shape-coupled code)
     # ------------------------------------------------------------------
 
-    def _next_runnable_task(
-        self, tl: TaskList, task_state: TaskStateFile
-    ) -> Task | None:
+    def _next_runnable_task(self, tl: TaskList, task_state: TaskStateFile) -> Task | None:
         pending = self._all_runnable_tasks(tl, task_state)
         if not pending:
             return None
         return pending[0]
 
-    def _all_runnable_tasks(
-        self, tl: TaskList, task_state: TaskStateFile
-    ) -> list[Task]:
+    def _all_runnable_tasks(self, tl: TaskList, task_state: TaskStateFile) -> list[Task]:
         """Runnable = non-gate, pending, all deps cleared.
 
         `supersede` and `cancel` patches rewrite downstream `depends_on`
@@ -204,9 +199,7 @@ class MissionCoordinator:
                 continue
             if task_state.status_of(task.id) != "pending":
                 continue
-            if all(
-                task_state.status_of(dep) == "cleared" for dep in task.depends_on
-            ):
+            if all(task_state.status_of(dep) == "cleared" for dep in task.depends_on):
                 runnable.append(task)
         return runnable
 
@@ -218,11 +211,7 @@ class MissionCoordinator:
     ) -> list[Task]:
         """Prefer a complete ready validator lane before starting more work."""
         by_id = {task.id: task for task in tl.tasks}
-        runnable_validators = {
-            task.id
-            for task in runnable
-            if task.type == "validate"
-        }
+        runnable_validators = {task.id for task in runnable if task.type == "validate"}
         for gate in (task for task in tl.tasks if task.type == "gate"):
             if task_state.status_of(gate.id) != "pending":
                 continue
@@ -238,8 +227,7 @@ class MissionCoordinator:
                 dep = by_id.get(dep_id)
                 if dep is not None and dep.type == "validate":
                     deps_ready = (
-                        task_state.status_of(dep_id) == "cleared"
-                        or dep_id in runnable_validators
+                        task_state.status_of(dep_id) == "cleared" or dep_id in runnable_validators
                     )
                 else:
                     deps_ready = task_state.status_of(dep_id) == "cleared"
@@ -248,11 +236,7 @@ class MissionCoordinator:
             if not deps_ready:
                 continue
             validator_dep_set = set(runnable_validators).intersection(validator_dep_ids)
-            return [
-                task
-                for task in runnable
-                if task.id in validator_dep_set
-            ]
+            return [task for task in runnable if task.id in validator_dep_set]
         return []
 
     def _dispatch_batch(
@@ -267,9 +251,7 @@ class MissionCoordinator:
             spawn_ts = self._batch_spawn_ts(index)
             task_state.set_status(task.id, "running")
             task_state.set_last_attempt(task.id, spawn_ts)
-            batch_attempts.append(
-                _BatchAttempt(task=task, spawn_ts=spawn_ts)
-            )
+            batch_attempts.append(_BatchAttempt(task=task, spawn_ts=spawn_ts))
         self.store.save_task_state(self.project_id, mid, task_state)
 
         requests = [
@@ -390,18 +372,14 @@ class MissionCoordinator:
             self.store.save_task_state(self.project_id, mid, task_state)
             if isinstance(handoff, ValidateHandoff):
                 for item in handoff.items:
-                    entry = contract_state.items.setdefault(
-                        item.item_id, ContractStateEntry()
-                    )
+                    entry = contract_state.items.setdefault(item.item_id, ContractStateEntry())
                     if item.passed:
                         entry.status = "passed"
                     elif entry.status != "passed":
                         entry.status = "failed"
                 self.store.save_contract_state(self.project_id, mid, contract_state)
                 if self._validate_failure_needs_attention(tl, task_state, task, handoff):
-                    attention.append(
-                        attn_factory.node_attention(mid, task, handoff)
-                    )
+                    attention.append(attn_factory.node_attention(mid, task, handoff))
 
         if handoff.request_attention:
             attention.append(attn_factory.node_attention(mid, task, handoff))
@@ -431,9 +409,7 @@ class MissionCoordinator:
         try:
             tl = self.store.load_task_list(self.project_id, mid)
         except FileNotFoundError:
-            self.store.save_state(
-                self.project_id, Failed(reason=f"tasks.json missing for {mid}")
-            )
+            self.store.save_state(self.project_id, Failed(reason=f"tasks.json missing for {mid}"))
             return StepResult.terminal("task_list missing")
 
         task_state = self.store.load_task_state(self.project_id, mid)
@@ -457,17 +433,11 @@ class MissionCoordinator:
     # Gates
     # ------------------------------------------------------------------
 
-    def _try_evaluate_a_gate(
-        self, tl: TaskList, task_state: TaskStateFile
-    ) -> "_GateEvent | None":
-        for gate in sorted(
-            (t for t in tl.tasks if t.type == "gate"), key=lambda t: t.id
-        ):
+    def _try_evaluate_a_gate(self, tl: TaskList, task_state: TaskStateFile) -> "_GateEvent | None":
+        for gate in sorted((t for t in tl.tasks if t.type == "gate"), key=lambda t: t.id):
             if task_state.status_of(gate.id) != "pending":
                 continue
-            if not all(
-                task_state.status_of(dep) == "cleared" for dep in gate.depends_on
-            ):
+            if not all(task_state.status_of(dep) == "cleared" for dep in gate.depends_on):
                 continue
             return _GateEvent(gate=gate, result=self._evaluate_gate(tl, gate))
         return None
@@ -487,6 +457,9 @@ class MissionCoordinator:
         validator_verdicts: dict[str, dict[str, bool]] = {}
         attempt_paths: dict[str, str] = {}
         missing_items: dict[str, list[str]] = {}
+
+        # Collect tasks we actually care about to avoid unnecessary I/O
+        filtered_preds = []
         for v_task_id in validate_preds:
             v_task = by_id.get(v_task_id)
             if v_task is None:
@@ -494,23 +467,25 @@ class MissionCoordinator:
             expected = [t for t in v_task.targets if t in gate.targets]
             if not expected:
                 continue
+            filtered_preds.append((v_task_id, expected))
 
-            attempts = self.store.list_attempts(
-                self.project_id, mid, node_id=v_task_id
-            )
-            if not attempts:
+        # Batch fetching handoffs for validators to avoid N+1 querying.
+        all_handoffs = self.store.list_attempts_for_nodes(
+            self.project_id, mid, node_ids=[vid for vid, _ in filtered_preds]
+        )
+
+        for v_task_id, expected in filtered_preds:
+            if v_task_id not in all_handoffs:
                 validator_verdicts[v_task_id] = {t: False for t in expected}
                 missing_items[v_task_id] = list(expected)
                 continue
-            last = attempts[-1]
-            handoff = self.store.read_attempt(
-                self.project_id, mid, last.spawn_ts, v_task_id
-            )
+
+            record, handoff = all_handoffs[v_task_id]
+
             attempt_paths[v_task_id] = str(
-                self.store.attempt_report_path(
-                    self.project_id, mid, last.spawn_ts, v_task_id
-                )
+                self.store.attempt_report_path(self.project_id, mid, record.spawn_ts, v_task_id)
             )
+
             if not isinstance(handoff, ValidateHandoff):
                 validator_verdicts[v_task_id] = {t: False for t in expected}
                 missing_items[v_task_id] = list(expected)
@@ -532,23 +507,16 @@ class MissionCoordinator:
         item_passed: dict[str, bool] = {}
         uncovered: list[str] = []
         for tgt in gate.targets:
-            covering = [
-                vid for vid, verds in validator_verdicts.items()
-                if tgt in verds
-            ]
+            covering = [vid for vid, verds in validator_verdicts.items() if tgt in verds]
             if not covering:
                 uncovered.append(tgt)
                 continue
-            item_passed[tgt] = all(
-                validator_verdicts[vid][tgt] for vid in covering
-            )
+            item_passed[tgt] = all(validator_verdicts[vid][tgt] for vid in covering)
 
         if uncovered:
             return _GateResult(
                 cleared=False,
-                reason=(
-                    f"no validator covered item(s): {', '.join(uncovered)}"
-                ),
+                reason=(f"no validator covered item(s): {', '.join(uncovered)}"),
                 failed_items=uncovered,
                 validator_verdicts=validator_verdicts,
                 attempt_paths=attempt_paths,
@@ -565,12 +533,11 @@ class MissionCoordinator:
         dissent_detail: list[str] = []
         for tgt in failed:
             dissenters = [
-                vid for vid, verds in validator_verdicts.items()
+                vid
+                for vid, verds in validator_verdicts.items()
                 if verds.get(tgt) is False and tgt not in missing_items.get(vid, [])
             ]
-            omitters = [
-                vid for vid, miss in missing_items.items() if tgt in miss
-            ]
+            omitters = [vid for vid, miss in missing_items.items() if tgt in miss]
             parts: list[str] = []
             if dissenters:
                 parts.append(f"dissent: {', '.join(dissenters)}")
@@ -625,9 +592,7 @@ class MissionCoordinator:
             if item.item_id in task.targets
         }
         targets_needing_attention = [
-            target
-            for target in task.targets
-            if returned.get(target) is not True
+            target for target in task.targets if returned.get(target) is not True
         ]
         if not targets_needing_attention and handoff.passed:
             return False
@@ -635,9 +600,7 @@ class MissionCoordinator:
             targets_needing_attention = list(task.targets)
 
         return any(
-            not self._has_pending_downstream_gate_covering(
-                tl, task_state, task.id, target
-            )
+            not self._has_pending_downstream_gate_covering(tl, task_state, task.id, target)
             for target in targets_needing_attention
         )
 
@@ -781,19 +744,13 @@ class MissionCoordinator:
                     task.id,
                     handoff,
                 )
-                attention.extend(
-                    self._apply_handoff_collect(mid, task, handoff, spawn_ts)
-                )
+                attention.extend(self._apply_handoff_collect(mid, task, handoff, spawn_ts))
                 continue
             last = attempts[-1]
-            read_handoff = self.store.read_attempt(
-                self.project_id, mid, last.spawn_ts, task.id
-            )
+            read_handoff = self.store.read_attempt(self.project_id, mid, last.spawn_ts, task.id)
             if read_handoff is None:
                 continue
-            attention.extend(
-                self._apply_handoff_collect(mid, task, read_handoff, last.spawn_ts)
-            )
+            attention.extend(self._apply_handoff_collect(mid, task, read_handoff, last.spawn_ts))
         if not saw_running:
             return None
         if attention:

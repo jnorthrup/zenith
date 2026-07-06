@@ -558,9 +558,7 @@ class ACPNodeRunner:
         progress_callback: ProgressCallback | None = None,
     ) -> NodeHandoff:
         """Spawn the worker MCP server + ACP agent; poll the attempt file; return the handoff."""
-        role: Literal["validator", "worker"] = (
-            "validator" if task.type == "validate" else "worker"
-        )
+        role: Literal["validator", "worker"] = "validator" if task.type == "validate" else "worker"
         role_config = self.config.for_role(role)
         acp_command = role_config.worker_acp_command or role_config.resolved_worker_acp_command
         if not acp_command:
@@ -569,7 +567,9 @@ class ACPNodeRunner:
             )
         acp_command = _augment_acp_command(acp_command, role_config.worker_provider)
 
-        workspace_dir = str(Path(cwd).expanduser().resolve() if cwd else store.workspace_dir(project_id))
+        workspace_dir = str(
+            Path(cwd).expanduser().resolve() if cwd else store.workspace_dir(project_id)
+        )
         project_bucket = str(store.zenith_dir(project_id))
         handoff_path = store.attempt_path(project_id, mission_id, spawn_ts, task.id)
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
@@ -730,8 +730,7 @@ class ACPNodeRunner:
         acp_command = role_config.worker_acp_command
         if not acp_command:
             raise RuntimeError(
-                "No ACP command for terminal reviewer. "
-                "Set ZENITH_TERMINAL_REVIEWER_ACP_COMMAND."
+                "No ACP command for terminal reviewer. Set ZENITH_TERMINAL_REVIEWER_ACP_COMMAND."
             )
         acp_command = _augment_acp_command(acp_command, role_config.worker_provider)
 
@@ -940,16 +939,12 @@ class ACPNodeRunner:
                 return False
             await asyncio.sleep(0.1)
 
-    async def _maybe_set_mode(
-        self, client: ACPClient, session_id: str, provider
-    ) -> None:
+    async def _maybe_set_mode(self, client: ACPClient, session_id: str, provider) -> None:
         mode = getattr(provider, "acp_runtime_mode", None)
         if not mode:
             return
         try:
-            await client.send_request(
-                "session/set_mode", {"sessionId": session_id, "modeId": mode}
-            )
+            await client.send_request("session/set_mode", {"sessionId": session_id, "modeId": mode})
         except ACPError as exc:
             raise ACPError(
                 f"Failed to set ACP runtime mode {mode!r} for {provider.name}: {exc}"
@@ -1059,9 +1054,7 @@ class ACPNodeRunner:
             return ValidateHandoff.model_validate(data)
         return WorkHandoff.model_validate(data)
 
-    def _synthesize_missing_handoff(
-        self, task: Task, *, summary: str = ""
-    ) -> NodeHandoff:
+    def _synthesize_missing_handoff(self, task: Task, *, summary: str = "") -> NodeHandoff:
         report = summary or "Agent session ended without calling end_node."
         if task.type == "validate":
             return ValidateHandoff(
@@ -1185,9 +1178,7 @@ class ACPTerminalReviewer:
         self.loader = AssetLoader(config)
         self.runner = ACPNodeRunner(config=config, loader=self.loader)
 
-    def review(
-        self, project_id: str, mission_id: str, spawn_ts: str
-    ) -> TerminalReviewHandoff:
+    def review(self, project_id: str, mission_id: str, spawn_ts: str) -> TerminalReviewHandoff:
         return _run_coro_blocking(
             self.runner.run_terminal_review(
                 project_id=project_id,

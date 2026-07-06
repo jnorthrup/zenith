@@ -13,6 +13,7 @@ directory, Zenith preserves it and copies missing bucket skills into it.
 
 See `specs/memory_v2/PRODUCT.md` and `specs/task_list/PRODUCT.md`.
 """
+
 from __future__ import annotations
 
 import json
@@ -70,9 +71,7 @@ def atomic_write_text(path: str | Path, content: str) -> None:
 
 
 def atomic_write_json(path: str | Path, payload: object) -> None:
-    atomic_write_text(
-        path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-    )
+    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def attempt_to_markdown(handoff: WorkHandoff | ValidateHandoff) -> str:
@@ -269,9 +268,7 @@ class ProjectStore:
                 continue
             try:
                 result.append(
-                    ProjectRecord.model_validate_json(
-                        project_json.read_text(encoding="utf-8")
-                    )
+                    ProjectRecord.model_validate_json(project_json.read_text(encoding="utf-8"))
                 )
             except Exception:
                 continue
@@ -288,9 +285,7 @@ class ProjectStore:
             return None
         from pydantic import TypeAdapter
 
-        return TypeAdapter(ProjectState).validate_json(
-            path.read_text(encoding="utf-8")
-        )
+        return TypeAdapter(ProjectState).validate_json(path.read_text(encoding="utf-8"))
 
     def save_state(self, project_id: str, state: ProjectState) -> None:
         atomic_write_json(
@@ -331,17 +326,13 @@ class ProjectStore:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def list_contract_assertions(
-        self, project_id: str, mission_id: str
-    ) -> list[str]:
+    def list_contract_assertions(self, project_id: str, mission_id: str) -> list[str]:
         from .task_validation import parse_contract_dir
 
         ids, _ = parse_contract_dir(self.contract_dir(project_id, mission_id))
         return sorted(ids)
 
-    def contract_assertion_path(
-        self, project_id: str, mission_id: str, assertion_id: str
-    ) -> Path:
+    def contract_assertion_path(self, project_id: str, mission_id: str, assertion_id: str) -> Path:
         return self.contract_dir(project_id, mission_id) / f"{assertion_id}.md"
 
     def load_contract_assertion(
@@ -360,32 +351,23 @@ class ProjectStore:
             return TaskStateFile()
         return TaskStateFile.model_validate_json(path.read_text(encoding="utf-8"))
 
-    def save_task_state(
-        self, project_id: str, mission_id: str, task_state: TaskStateFile
-    ) -> None:
+    def save_task_state(self, project_id: str, mission_id: str, task_state: TaskStateFile) -> None:
         atomic_write_json(
             self.mission_runtime_dir(project_id, mission_id) / "task-state.json",
             task_state.model_dump(mode="json"),
         )
 
-    def load_contract_state(
-        self, project_id: str, mission_id: str
-    ) -> ContractStateFile:
-        path = (
-            self.mission_runtime_dir(project_id, mission_id) / "contract-state.json"
-        )
+    def load_contract_state(self, project_id: str, mission_id: str) -> ContractStateFile:
+        path = self.mission_runtime_dir(project_id, mission_id) / "contract-state.json"
         if not path.exists():
             return ContractStateFile()
-        return ContractStateFile.model_validate_json(
-            path.read_text(encoding="utf-8")
-        )
+        return ContractStateFile.model_validate_json(path.read_text(encoding="utf-8"))
 
     def save_contract_state(
         self, project_id: str, mission_id: str, contract_state: ContractStateFile
     ) -> None:
         atomic_write_json(
-            self.mission_runtime_dir(project_id, mission_id)
-            / "contract-state.json",
+            self.mission_runtime_dir(project_id, mission_id) / "contract-state.json",
             contract_state.model_dump(mode="json"),
         )
 
@@ -413,10 +395,7 @@ class ProjectStore:
         """JSON handoff path — written by the worker MCP server (ZENITH_HANDOFF_PATH)
         and polled by the coordinator. Lives in the runtime cursor tree
         (.zenith-runtime/), not the durable .zenith/ record."""
-        return (
-            self.attempts_runtime_dir(project_id, mission_id)
-            / f"{spawn_ts}__{node_id}.json"
-        )
+        return self.attempts_runtime_dir(project_id, mission_id) / f"{spawn_ts}__{node_id}.json"
 
     def attempt_report_path(
         self,
@@ -475,6 +454,44 @@ class ProjectStore:
             results.append(AttemptRecord(spawn_ts=ts, node_id=nid, path=entry))
         return results
 
+    def list_attempts_for_nodes(
+        self,
+        project_id: str,
+        mission_id: str,
+        node_ids: list[str],
+    ) -> dict[str, tuple[AttemptRecord, WorkHandoff | ValidateHandoff]]:
+        """Batch retrieves the latest handoff for each requested node ID.
+
+        This prevents N+1 queries by parsing multiple attempt files in a single pass.
+        Returns a dictionary mapping node_id to a tuple of (AttemptRecord, Handoff).
+        """
+        if not node_ids:
+            return {}
+
+        d = self.attempts_runtime_dir(project_id, mission_id)
+        if not d.exists():
+            return {}
+
+        target_nodes = set(node_ids)
+        latest_attempts: dict[str, AttemptRecord] = {}
+
+        # Globbing over *.json and splitting stem gives us the attempt records.
+        # Sorting guarantees chronological order, so iterating populates the dict with the last record.
+        for entry in sorted(d.glob("*.json")):
+            stem = entry.stem
+            if "__" not in stem:
+                continue
+            ts, nid = stem.split("__", 1)
+            if nid in target_nodes:
+                latest_attempts[nid] = AttemptRecord(spawn_ts=ts, node_id=nid, path=entry)
+
+        results = {}
+        for nid, record in latest_attempts.items():
+            handoff = self._parse_attempt(record.path)
+            results[nid] = (record, handoff)
+
+        return results
+
     @staticmethod
     def _parse_attempt(path: Path) -> WorkHandoff | ValidateHandoff:
         raw = path.read_text(encoding="utf-8")
@@ -490,14 +507,10 @@ class ProjectStore:
     def regressions_dir(self, project_id: str, mission_id: str) -> Path:
         return self.mission_dir(project_id, mission_id) / "regressions"
 
-    def regression_path(
-        self, project_id: str, mission_id: str, assertion_id: str
-    ) -> Path:
+    def regression_path(self, project_id: str, mission_id: str, assertion_id: str) -> Path:
         return self.regressions_dir(project_id, mission_id) / f"{assertion_id}.md"
 
-    def regression_entry_count(
-        self, project_id: str, mission_id: str, assertion_id: str
-    ) -> int:
+    def regression_entry_count(self, project_id: str, mission_id: str, assertion_id: str) -> int:
         """Count top-level (`## `) markdown headings as entries."""
         path = self.regression_path(project_id, mission_id, assertion_id)
         if not path.exists():
@@ -516,13 +529,9 @@ class ProjectStore:
         path = self.zenith_runtime_dir(project_id) / "attention.json"
         if not path.exists():
             return []
-        return AttentionFile.model_validate_json(
-            path.read_text(encoding="utf-8")
-        ).items
+        return AttentionFile.model_validate_json(path.read_text(encoding="utf-8")).items
 
-    def save_attention(
-        self, project_id: str, items: list[AttentionItemInternal]
-    ) -> None:
+    def save_attention(self, project_id: str, items: list[AttentionItemInternal]) -> None:
         atomic_write_json(
             self.zenith_runtime_dir(project_id) / "attention.json",
             AttentionFile(items=items).model_dump(mode="json"),
@@ -584,9 +593,7 @@ class ProjectStore:
             if dec.patch is not None and not dec.patch.is_empty:
                 parts.append("- patch:")
                 parts.append("```json")
-                parts.append(
-                    json.dumps(dec.patch.model_dump(mode="json", by_alias=True), indent=2)
-                )
+                parts.append(json.dumps(dec.patch.model_dump(mode="json", by_alias=True), indent=2))
                 parts.append("```")
             parts.append("")
         atomic_write_text(path, "\n".join(parts).rstrip() + "\n")
@@ -606,17 +613,13 @@ class ProjectStore:
         """Orchestrator-only terminal-review handoffs (reviewer-written JSON cursors)."""
         return self.mission_runtime_dir(project_id, mission_id) / "terminal-reviews"
 
-    def terminal_review_path(
-        self, project_id: str, mission_id: str, spawn_ts: str
-    ) -> Path:
+    def terminal_review_path(self, project_id: str, mission_id: str, spawn_ts: str) -> Path:
         """JSON path — written by the terminal-reviewer MCP server and polled by
         the coordinator. Lives in the runtime cursor tree (.zenith-runtime/),
         not the durable .zenith/ record."""
         return self.terminal_reviews_runtime_dir(project_id, mission_id) / f"{spawn_ts}.json"
 
-    def terminal_review_report_path(
-        self, project_id: str, mission_id: str, spawn_ts: str
-    ) -> Path:
+    def terminal_review_report_path(self, project_id: str, mission_id: str, spawn_ts: str) -> Path:
         """Agent-readable markdown mirror."""
         return self.terminal_reviews_dir(project_id, mission_id) / f"{spawn_ts}.md"
 

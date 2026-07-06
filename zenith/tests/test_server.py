@@ -1,4 +1,5 @@
 """MCP server tests — tool surface per mode + in-process integration."""
+
 from __future__ import annotations
 
 import asyncio
@@ -149,12 +150,8 @@ async def test_end_node_idempotent_overwrite(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setenv("ZENITH_NODE_TYPE", "work")
     monkeypatch.setenv("ZENITH_NODE_ID", "w1")
     server = create_worker_server()
-    await server.call_tool(
-        "end_node", {"done": True, "report": "first"}
-    )
-    await server.call_tool(
-        "end_node", {"done": True, "report": "second"}
-    )
+    await server.call_tool("end_node", {"done": True, "report": "first"})
+    await server.call_tool("end_node", {"done": True, "report": "second"})
     assert json.loads(handoff_path.read_text())["report"] == "second"
 
 
@@ -163,9 +160,7 @@ async def test_submit_terminal_review_writes_file(tmp_path: Path, monkeypatch) -
     review_path = tmp_path / "terminal-review.json"
     monkeypatch.setenv("ZENITH_TERMINAL_REVIEW_PATH", str(review_path))
     server = create_terminal_reviewer_server()
-    await server.call_tool(
-        "submit_terminal_review", {"done": True, "report": "all clean"}
-    )
+    await server.call_tool("submit_terminal_review", {"done": True, "report": "all clean"})
     data = json.loads(review_path.read_text())
     assert data == {"done": True, "report": "all clean"}
 
@@ -176,9 +171,7 @@ async def test_submit_terminal_review_writes_file(tmp_path: Path, monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_end_to_end_in_process(
-    config: HarnessConfig, workspace: Path
-) -> None:
+async def test_orchestrator_end_to_end_in_process(config: HarnessConfig, workspace: Path) -> None:
     def responder(req):
         if req.node.type == "work":
             return WorkHandoff(node_id=req.node.id, done=True, report="ok")
@@ -206,9 +199,30 @@ async def test_orchestrator_end_to_end_in_process(
     (contract_dir / "VAL-001.md").write_text("# VAL-001\n")
     task_list_dict = {
         "tasks": [
-            {"id": "w1", "type": "work", "body": "do", "targets": ["VAL-001"], "skill": "s", "depends_on": []},
-            {"id": "v1", "type": "validate", "body": "audit", "targets": ["VAL-001"], "skill": "aud", "depends_on": ["w1"]},
-            {"id": "g1", "type": "gate", "body": "", "targets": ["VAL-001"], "skill": None, "depends_on": ["v1"]},
+            {
+                "id": "w1",
+                "type": "work",
+                "body": "do",
+                "targets": ["VAL-001"],
+                "skill": "s",
+                "depends_on": [],
+            },
+            {
+                "id": "v1",
+                "type": "validate",
+                "body": "audit",
+                "targets": ["VAL-001"],
+                "skill": "aud",
+                "depends_on": ["w1"],
+            },
+            {
+                "id": "g1",
+                "type": "gate",
+                "body": "",
+                "targets": ["VAL-001"],
+                "skill": None,
+                "depends_on": ["v1"],
+            },
         ],
     }
     await server.call_tool("submit_plan", {"project_id": pid, "task_list": task_list_dict})
@@ -281,9 +295,30 @@ async def test_advance_project_tolerates_asyncio_run_dispatcher(
     (contract_dir / "VAL-001.md").write_text("# VAL-001\n")
     task_list_dict = {
         "tasks": [
-            {"id": "w1", "type": "work", "body": "do", "targets": ["VAL-001"], "skill": "s", "depends_on": []},
-            {"id": "v1", "type": "validate", "body": "audit", "targets": ["VAL-001"], "skill": "aud", "depends_on": ["w1"]},
-            {"id": "g1", "type": "gate", "body": "", "targets": ["VAL-001"], "skill": None, "depends_on": ["v1"]},
+            {
+                "id": "w1",
+                "type": "work",
+                "body": "do",
+                "targets": ["VAL-001"],
+                "skill": "s",
+                "depends_on": [],
+            },
+            {
+                "id": "v1",
+                "type": "validate",
+                "body": "audit",
+                "targets": ["VAL-001"],
+                "skill": "aud",
+                "depends_on": ["w1"],
+            },
+            {
+                "id": "g1",
+                "type": "gate",
+                "body": "",
+                "targets": ["VAL-001"],
+                "skill": None,
+                "depends_on": ["v1"],
+            },
         ],
     }
     await server.call_tool("submit_plan", {"project_id": pid, "task_list": task_list_dict})

@@ -1,4 +1,5 @@
 """CLI integration tests — init / list-projects / show-project / install-skills."""
+
 from __future__ import annotations
 
 import json
@@ -64,19 +65,13 @@ class TestInit:
         gitignore = workspace / ".gitignore"
         gitignore.write_text("node_modules/\n")
         original = gitignore.read_text()
-        r = runner.invoke(
-            cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"]
-        )
+        r = runner.invoke(cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"])
         assert r.exit_code == 0, r.output
         assert gitignore.read_text() == original
 
-    def test_idempotent(
-        self, runner: CliRunner, workspace: Path, env: dict[str, str]
-    ) -> None:
+    def test_idempotent(self, runner: CliRunner, workspace: Path, env: dict[str, str]) -> None:
         for _ in range(2):
-            r = runner.invoke(
-                cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"]
-            )
+            r = runner.invoke(cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"])
             assert r.exit_code == 0, r.output
         # .mcp.json preserved across reruns.
         assert (workspace / ".mcp.json").exists()

@@ -11,6 +11,7 @@ Attempt filenames keep the `<ts>__<node_id>.json` token for on-disk continuity
 — `node_id` reads as task id. WorkHandoff/ValidateHandoff retain the
 `node_id` field for the same reason; an eventual rename is deferred.
 """
+
 from __future__ import annotations
 
 import re
@@ -66,16 +67,11 @@ class Task(BaseModel):
     )
     skill: str | None = Field(
         default=None,
-        description=(
-            "Skill procedure to load. Required for work/validate; must be null for "
-            "gate."
-        ),
+        description=("Skill procedure to load. Required for work/validate; must be null for gate."),
     )
     auto_merge: bool = Field(
         default=True,
-        description=(
-            "Legacy no-op. Work tasks always run directly in the project workspace."
-        ),
+        description=("Legacy no-op. Work tasks always run directly in the project workspace."),
     )
     depends_on: list[str] = Field(
         default_factory=list,
@@ -220,6 +216,7 @@ class AttentionItemInternal(AttentionItem):
     kind: AttentionKind
     mission_id: str
     node_id: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # ProjectState (discriminated union)

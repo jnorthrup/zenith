@@ -1,4 +1,5 @@
 """Parallel coordinator behaviour (task-list shape)."""
+
 from __future__ import annotations
 
 import threading
@@ -409,7 +410,10 @@ def test_reconcile_applies_multiple_running_attempts(
         task_state.set_status(tid, "running")
         task_state.set_last_attempt(tid, spawn_ts)
         controller.store.save_attempt(
-            pid, "mission-001", spawn_ts, tid,
+            pid,
+            "mission-001",
+            spawn_ts,
+            tid,
             WorkHandoff(node_id=tid, done=True, report="ok"),
         )
     controller.store.save_task_state(pid, "mission-001", task_state)

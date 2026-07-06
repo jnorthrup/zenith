@@ -4,6 +4,7 @@ The production `ACPNodeDispatcher` lives in `acp_runner` (Phase 5). The
 coordinator only depends on the abstract protocol so tests can inject
 mocks without spinning up subprocesses.
 """
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -34,9 +35,7 @@ class NodeDispatcher(Protocol):
 
 
 class TerminalReviewer(Protocol):
-    def review(
-        self, project_id: str, mission_id: str, spawn_ts: str
-    ) -> TerminalReviewHandoff: ...
+    def review(self, project_id: str, mission_id: str, spawn_ts: str) -> TerminalReviewHandoff: ...
 
 
 # ---------------------------------------------------------------------------
@@ -87,9 +86,7 @@ class MockTerminalReviewer:
         self.review_result = review
         self.calls: list[tuple[str, str, str]] = []
 
-    def review(
-        self, project_id: str, mission_id: str, spawn_ts: str
-    ) -> TerminalReviewHandoff:
+    def review(self, project_id: str, mission_id: str, spawn_ts: str) -> TerminalReviewHandoff:
         self.calls.append((project_id, mission_id, spawn_ts))
         return self.review_result
 

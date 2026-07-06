@@ -2,6 +2,7 @@
 
 See `specs/task_list/PRODUCT.md` §Dispatch.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -97,16 +98,12 @@ def _seed_project(
     controller.start_project(brief, str(workspace))
     pid = controller.store.list_projects()[0].id
     contract_dir = controller.store.ensure_contract_dir(pid, mission_id)
-    (contract_dir / f"{assertion}.md").write_text(
-        f"# {assertion}\n\nStatement body.\n"
-    )
+    (contract_dir / f"{assertion}.md").write_text(f"# {assertion}\n\nStatement body.\n")
     return pid
 
 
 class TestHappyPath:
-    def test_full_pipeline_to_done(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_full_pipeline_to_done(self, config: HarnessConfig, workspace: Path) -> None:
         def responder(req: DispatchRequest) -> NodeHandoff:
             if req.task.type == "work":
                 return WorkHandoff(node_id=req.task.id, done=True, report="ok")
@@ -130,9 +127,7 @@ class TestHappyPath:
         items = controller.store.load_attention(pid)
         assert items and items[0].kind == "gate_checkpoint"
 
-        env = controller.decide_attention(
-            pid, [Decision(item_id=items[0].id, action="continue")]
-        )
+        env = controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
         assert env.state.state in ("mission_running", "done")
 
         env = controller.advance_project(pid)
@@ -152,9 +147,7 @@ class TestHappyPath:
 
         def responder(req: DispatchRequest) -> NodeHandoff:
             nonlocal saw_synced_skill
-            saw_synced_skill = (
-                codex_skills / "new-worker" / "SKILL.md"
-            ).exists()
+            saw_synced_skill = (codex_skills / "new-worker" / "SKILL.md").exists()
             return WorkHandoff(node_id=req.task.id, done=True, report="ok")
 
         controller = ProjectController(
@@ -163,12 +156,7 @@ class TestHappyPath:
             MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
-        bucket_skill = (
-            controller.store.zenith_dir(pid)
-            / "skills"
-            / "new-worker"
-            / "SKILL.md"
-        )
+        bucket_skill = controller.store.zenith_dir(pid) / "skills" / "new-worker" / "SKILL.md"
         bucket_skill.parent.mkdir(parents=True)
         bucket_skill.write_text("# New worker\n")
 
@@ -184,14 +172,14 @@ class TestHappyPath:
 
 
 class TestNodeFailedFlow:
-    def test_work_failure_raises_attention(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_work_failure_raises_attention(self, config: HarnessConfig, workspace: Path) -> None:
         def responder(req: DispatchRequest) -> NodeHandoff:
             return WorkHandoff(node_id=req.task.id, done=False, report="blocked")
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, _simple_tl())
@@ -203,9 +191,7 @@ class TestNodeFailedFlow:
 
 
 class TestRequestAttentionRaisesNodeAttention:
-    def test_request_attention_true_raises(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_request_attention_true_raises(self, config: HarnessConfig, workspace: Path) -> None:
         def responder(req: DispatchRequest) -> NodeHandoff:
             return WorkHandoff(
                 node_id=req.task.id,
@@ -215,7 +201,9 @@ class TestRequestAttentionRaisesNodeAttention:
             )
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, _simple_tl())
@@ -242,7 +230,9 @@ class TestGateFailed:
             )
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, _simple_tl())
@@ -268,7 +258,9 @@ class TestGateOptional:
             )
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, _validate_no_gate_tl())
@@ -307,7 +299,9 @@ class TestValidatorDissentFailsGate:
             )
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, self._two_validator_tl())
@@ -335,7 +329,9 @@ class TestValidatorDissentFailsGate:
             )
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, self._two_validator_tl())
@@ -370,7 +366,9 @@ class TestValidatorDissentFailsGate:
             )
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, self._two_validator_tl())
@@ -384,14 +382,14 @@ class TestValidatorDissentFailsGate:
 
 
 class TestDecideAttentionValidation:
-    def test_atomic_rejection(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_atomic_rejection(self, config: HarnessConfig, workspace: Path) -> None:
         def responder(req: DispatchRequest) -> NodeHandoff:
             return WorkHandoff(node_id=req.task.id, done=False, report="blocked")
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, _simple_tl())
@@ -404,29 +402,25 @@ class TestDecideAttentionValidation:
             )
         assert exc.value.code == "invalid_decisions"
 
-    def test_missing_decision_rejected(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_missing_decision_rejected(self, config: HarnessConfig, workspace: Path) -> None:
         def responder(req: DispatchRequest) -> NodeHandoff:
             return WorkHandoff(node_id=req.task.id, done=False, report="blocked")
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, _simple_tl())
         controller.advance_project(pid)
         with pytest.raises(ToolError) as exc:
             controller.decide_attention(pid, [])
-        assert any(
-            "unresolved_attention_item" in str(d) for d in (exc.value.details or [])
-        )
+        assert any("unresolved_attention_item" in str(d) for d in (exc.value.details or []))
 
 
 class TestTerminalReview:
-    def test_clean_review_to_done(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_clean_review_to_done(self, config: HarnessConfig, workspace: Path) -> None:
         responses: list[NodeHandoff] = [
             WorkHandoff(node_id="w1", done=True, report=""),
             ValidateHandoff(
@@ -451,9 +445,7 @@ class TestTerminalReview:
         controller.submit_plan(pid, _simple_tl())
         controller.advance_project(pid)
         items = controller.store.load_attention(pid)
-        controller.decide_attention(
-            pid, [Decision(item_id=items[0].id, action="continue")]
-        )
+        controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
         env = controller.advance_project(pid)
         assert env.state.state == "mission_running"
         env = controller.end_mission(pid)
@@ -488,9 +480,7 @@ class TestTerminalReview:
         controller.submit_plan(pid, _simple_tl())
         controller.advance_project(pid)
         items = controller.store.load_attention(pid)
-        controller.decide_attention(
-            pid, [Decision(item_id=items[0].id, action="continue")]
-        )
+        controller.decide_attention(pid, [Decision(item_id=items[0].id, action="continue")])
         env = controller.advance_project(pid)
         assert env.state.state == "mission_running"
         env = controller.end_mission(pid)
@@ -519,7 +509,9 @@ class TestDecideAttentionPatchAddItems:
             )
 
         controller = ProjectController(
-            config, MockDispatcher(responder), MockTerminalReviewer(TerminalReviewHandoff(done=True, report=""))
+            config,
+            MockDispatcher(responder),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
         controller.submit_plan(pid, _simple_tl())
@@ -549,11 +541,10 @@ class TestDecideAttentionPatchAddItems:
 
 
 class TestEnvelopeProjectId:
-    def test_envelope_carries_project_id(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_envelope_carries_project_id(self, config: HarnessConfig, workspace: Path) -> None:
         controller = ProjectController(
-            config, MockDispatcher(lambda r: WorkHandoff(node_id=r.task.id, done=True, report="")),
+            config,
+            MockDispatcher(lambda r: WorkHandoff(node_id=r.task.id, done=True, report="")),
             MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)
@@ -562,9 +553,7 @@ class TestEnvelopeProjectId:
         env2 = controller.inspect_project(env.projectId)
         assert env2.projectId == env.projectId
 
-    def test_tool_specific_dag_modes(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_tool_specific_dag_modes(self, config: HarnessConfig, workspace: Path) -> None:
         def responder(req: DispatchRequest) -> NodeHandoff:
             if req.task.type == "work":
                 return WorkHandoff(node_id=req.task.id, done=True, report="ok")
@@ -622,7 +611,8 @@ class TestEnvelopeProjectId:
 class TestAbortProject:
     def test_aborts(self, config: HarnessConfig, workspace: Path) -> None:
         controller = ProjectController(
-            config, MockDispatcher(lambda r: WorkHandoff(node_id=r.task.id, done=True, report="")),
+            config,
+            MockDispatcher(lambda r: WorkHandoff(node_id=r.task.id, done=True, report="")),
             MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
         pid = _seed_project(controller, workspace)

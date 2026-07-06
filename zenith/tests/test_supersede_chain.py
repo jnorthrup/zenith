@@ -8,6 +8,7 @@ Covers:
 - Status guards: cleared / running / sealed tasks cannot be
   superseded/cancelled.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -68,11 +69,13 @@ class TestSupersedeRewrite:
     """supersede rewrites every downstream `depends_on` reference in-place."""
 
     def test_downstream_refs_rewritten(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"]),
-            _task("v1", "validate", ["X"], skill="aud", depends_on=["w1"]),
-            _task("g1", "gate", ["X"], depends_on=["v1"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"]),
+                _task("v1", "validate", ["X"], skill="aud", depends_on=["w1"]),
+                _task("g1", "gate", ["X"], depends_on=["v1"]),
+            ]
+        )
         ts = TaskStateFile()
         ts.set_status("w1", "failed")
         patch = TaskListPatch(
@@ -89,9 +92,7 @@ class TestSupersedeRewrite:
         assert new_ts.status_of("w1") == "superseded"
         assert new_ts.status_of("w1_v2") == "pending"
 
-    def test_runtime_runnable_after_rewrite(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_runtime_runnable_after_rewrite(self, config: HarnessConfig, workspace: Path) -> None:
         """After rewrite, a downstream task is runnable iff the rewritten
         dep (the live replacement) is cleared — not the old superseded one.
         """
@@ -101,10 +102,12 @@ class TestSupersedeRewrite:
         store = ProjectStore(config)
         store.create_project("brief", workspace, project_id="p1")
 
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"]),
-            _task("downstream", "work", ["Y"], depends_on=["w1"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"]),
+                _task("downstream", "work", ["Y"], depends_on=["w1"]),
+            ]
+        )
         ts = TaskStateFile()
         ts.set_status("w1", "failed")
         patch = TaskListPatch(
@@ -115,7 +118,8 @@ class TestSupersedeRewrite:
         assert errs == []
 
         coord = MissionCoordinator(
-            store, "p1",
+            store,
+            "p1",
             MockDispatcher(lambda r: WorkHandoff(node_id=r.task.id, done=True, report="")),
             MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
@@ -136,7 +140,9 @@ class TestSupersedeGuards:
         ts = TaskStateFile()
         ts.set_status("w1", "cleared")
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"},
+            tl,
+            ts,
+            {"X"},
             TaskListPatch(
                 supersede={"w1": "w1_v2"},
                 add=[_task("w1_v2", "work", ["X"])],
@@ -149,7 +155,9 @@ class TestSupersedeGuards:
         ts = TaskStateFile()
         ts.set_status("w1", "running")
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"},
+            tl,
+            ts,
+            {"X"},
             TaskListPatch(
                 supersede={"w1": "w1_v2"},
                 add=[_task("w1_v2", "work", ["X"])],
@@ -162,7 +170,9 @@ class TestSupersedeGuards:
         ts = TaskStateFile()
         ts.set_status("w1", "failed")
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"},
+            tl,
+            ts,
+            {"X"},
             TaskListPatch(supersede={"w1": "w1"}),
         )
         assert any(e.code == "supersede_self" for e in errs)
@@ -171,7 +181,9 @@ class TestSupersedeGuards:
         tl = TaskList(tasks=[_task("w1", "work", ["X"])])
         ts = TaskStateFile()
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"},
+            tl,
+            ts,
+            {"X"},
             TaskListPatch(
                 supersede={"ghost": "w_new"},
                 add=[_task("w_new", "work", ["X"])],
@@ -180,18 +192,22 @@ class TestSupersedeGuards:
         assert any(e.code == "unknown_supersede_target" for e in errs)
 
     def test_supersede_inside_sealed_subgraph_rejected(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"]),
-            _task("v1", "validate", ["X"], skill="aud", depends_on=["w1"]),
-            _task("g1", "gate", ["X"], depends_on=["v1"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"]),
+                _task("v1", "validate", ["X"], skill="aud", depends_on=["w1"]),
+                _task("g1", "gate", ["X"], depends_on=["v1"]),
+            ]
+        )
         ts = TaskStateFile()
         # Sealed: w1, v1 cleared; g1 cleared (sealed all upstream).
         ts.set_status("w1", "cleared")
         ts.set_status("v1", "cleared")
         ts.set_status("g1", "cleared")
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"},
+            tl,
+            ts,
+            {"X"},
             TaskListPatch(
                 supersede={"w1": "w1_v2"},
                 add=[_task("w1_v2", "work", ["X"])],
@@ -207,11 +223,13 @@ class TestCancel:
     """cancel removes a task: superseded + dropped from downstream deps."""
 
     def test_cancel_drops_dep(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w1", "work", ["X"]),
-            _task("w2", "work", ["Y"]),
-            _task("downstream", "work", ["Z"], depends_on=["w1", "w2"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w1", "work", ["X"]),
+                _task("w2", "work", ["Y"]),
+                _task("downstream", "work", ["Z"], depends_on=["w1", "w2"]),
+            ]
+        )
         ts = TaskStateFile()
         ts.set_status("w1", "failed")
         # Cancel w1; downstream should keep only w2 as a dep.
@@ -219,7 +237,9 @@ class TestCancel:
         # The simplest scenario: only test the rewrite, not the coverage rule,
         # by superseding the failed w1 with an empty cancel + add new fulfiller.
         new_tl, new_ts, _, errs = apply_patch(
-            tl, ts, {"X", "Y", "Z"},
+            tl,
+            ts,
+            {"X", "Y", "Z"},
             TaskListPatch(
                 cancel=["w1"],
                 add=[
@@ -238,16 +258,20 @@ class TestCancel:
     def test_cancel_simple_drops_dep(self) -> None:
         # A discovery task with no targets is the cleanest cancel test —
         # cancelling it doesn't disturb assertion coverage.
-        tl2 = TaskList(tasks=[
-            _task("w_x", "work", ["X"]),
-            _task("scout", "work", []),  # discovery, no targets
-            _task("v", "validate", ["X"], skill="aud", depends_on=["w_x", "scout"]),
-            _task("g", "gate", ["X"], depends_on=["v"]),
-        ])
+        tl2 = TaskList(
+            tasks=[
+                _task("w_x", "work", ["X"]),
+                _task("scout", "work", []),  # discovery, no targets
+                _task("v", "validate", ["X"], skill="aud", depends_on=["w_x", "scout"]),
+                _task("g", "gate", ["X"], depends_on=["v"]),
+            ]
+        )
         ts2 = TaskStateFile()
         ts2.set_status("scout", "failed")
         new_tl, new_ts, _, errs = apply_patch(
-            tl2, ts2, {"X"},
+            tl2,
+            ts2,
+            {"X"},
             TaskListPatch(cancel=["scout"]),
         )
         assert errs == [], errs
@@ -258,9 +282,7 @@ class TestCancel:
         assert scout_after is not None
         assert new_ts.status_of("scout") == "superseded"
 
-    def test_cancel_unblocks_downstream(
-        self, config: HarnessConfig, workspace: Path
-    ) -> None:
+    def test_cancel_unblocks_downstream(self, config: HarnessConfig, workspace: Path) -> None:
         """A downstream task whose only dep is cancelled becomes runnable."""
         from zenith_harness.coordinator import MissionCoordinator
         from zenith_harness.storage import ProjectStore
@@ -268,19 +290,25 @@ class TestCancel:
         store = ProjectStore(config)
         store.create_project("brief", workspace, project_id="p1")
 
-        tl = TaskList(tasks=[
-            _task("scout", "work", []),
-            _task("w_x", "work", ["X"], depends_on=["scout"]),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("scout", "work", []),
+                _task("w_x", "work", ["X"], depends_on=["scout"]),
+            ]
+        )
         ts = TaskStateFile()
         ts.set_status("scout", "failed")
         new_tl, new_ts, _, errs = apply_patch(
-            tl, ts, {"X"}, TaskListPatch(cancel=["scout"]),
+            tl,
+            ts,
+            {"X"},
+            TaskListPatch(cancel=["scout"]),
         )
         assert errs == []
 
         coord = MissionCoordinator(
-            store, "p1",
+            store,
+            "p1",
             MockDispatcher(lambda r: WorkHandoff(node_id=r.task.id, done=True, report="")),
             MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
         )
@@ -288,26 +316,36 @@ class TestCancel:
         assert "w_x" in runnable_ids
 
     def test_cancel_cleared_rejected(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w_x", "work", ["X"]),
-            _task("scout", "work", []),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w_x", "work", ["X"]),
+                _task("scout", "work", []),
+            ]
+        )
         ts = TaskStateFile()
         ts.set_status("scout", "cleared")
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"}, TaskListPatch(cancel=["scout"]),
+            tl,
+            ts,
+            {"X"},
+            TaskListPatch(cancel=["scout"]),
         )
         assert any(e.code == "cancel_cleared_task" for e in errs)
 
     def test_cancel_running_rejected(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w_x", "work", ["X"]),
-            _task("scout", "work", []),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w_x", "work", ["X"]),
+                _task("scout", "work", []),
+            ]
+        )
         ts = TaskStateFile()
         ts.set_status("scout", "running")
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"}, TaskListPatch(cancel=["scout"]),
+            tl,
+            ts,
+            {"X"},
+            TaskListPatch(cancel=["scout"]),
         )
         assert any(e.code == "cancel_status_invalid" for e in errs)
 
@@ -315,19 +353,26 @@ class TestCancel:
         tl = TaskList(tasks=[_task("w_x", "work", ["X"])])
         ts = TaskStateFile()
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"}, TaskListPatch(cancel=["ghost"]),
+            tl,
+            ts,
+            {"X"},
+            TaskListPatch(cancel=["ghost"]),
         )
         assert any(e.code == "unknown_cancel_target" for e in errs)
 
     def test_cancel_overlap_with_supersede_rejected(self) -> None:
-        tl = TaskList(tasks=[
-            _task("w_x", "work", ["X"]),
-            _task("scout", "work", []),
-        ])
+        tl = TaskList(
+            tasks=[
+                _task("w_x", "work", ["X"]),
+                _task("scout", "work", []),
+            ]
+        )
         ts = TaskStateFile()
         ts.set_status("scout", "failed")
         _, _, _, errs = apply_patch(
-            tl, ts, {"X"},
+            tl,
+            ts,
+            {"X"},
             TaskListPatch(
                 cancel=["scout"],
                 supersede={"scout": "scout_v2"},

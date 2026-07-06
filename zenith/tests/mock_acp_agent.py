@@ -83,18 +83,21 @@ def main() -> None:
         method = msg.get("method")
         req_id = msg.get("id")
         if method == "initialize":
-            resp = _response(req_id, {
-                "protocolVersion": 1,
-                "agentCapabilities": {
-                    "loadSession": False,
-                    "promptCapabilities": {
-                        "audio": False,
-                        "embeddedContent": False,
-                        "image": False,
+            resp = _response(
+                req_id,
+                {
+                    "protocolVersion": 1,
+                    "agentCapabilities": {
+                        "loadSession": False,
+                        "promptCapabilities": {
+                            "audio": False,
+                            "embeddedContent": False,
+                            "image": False,
+                        },
                     },
+                    "authMethods": [],
                 },
-                "authMethods": [],
-            })
+            )
         elif method == "session/new":
             resp = _response(req_id, {"sessionId": "mock-session-1"})
         elif method == "session/set_mode":

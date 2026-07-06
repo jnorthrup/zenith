@@ -1,4 +1,5 @@
 """Codex ACP subprocess environment regression tests."""
+
 from __future__ import annotations
 
 import os

@@ -41,9 +41,7 @@ class AssetLoader:
             undefined=StrictUndefined, autoescape=False, keep_trailing_newline=True
         )
 
-    def load_skill(
-        self, skill_name: str, project_id: str | None = None
-    ) -> LoadedMarkdownAsset:
+    def load_skill(self, skill_name: str, project_id: str | None = None) -> LoadedMarkdownAsset:
         for source, base_dir in self._iter_skill_dirs(project_id):
             skill_path = base_dir / skill_name / "SKILL.md"
             if skill_path.exists():
@@ -60,9 +58,7 @@ class AssetLoader:
                 )
         raise FileNotFoundError(f"Skill not found: {skill_name}")
 
-    def list_skills(
-        self, project_id: str | None = None
-    ) -> list[LoadedMarkdownAsset]:
+    def list_skills(self, project_id: str | None = None) -> list[LoadedMarkdownAsset]:
         seen: set[str] = set()
         results: list[LoadedMarkdownAsset] = []
         for source, base_dir in self._iter_skill_dirs(project_id):
@@ -119,7 +115,9 @@ class AssetLoader:
     ) -> list[tuple[Literal["project", "personal", "bundled"], Path]]:
         dirs = self.config.skill_dirs(project_id)
         all_labels: list[Literal["project", "personal", "bundled"]] = [
-            "project", "personal", "bundled",
+            "project",
+            "personal",
+            "bundled",
         ]
         labels = all_labels if project_id is not None else all_labels[1:]
         return list(zip(labels, dirs))
