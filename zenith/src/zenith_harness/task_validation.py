@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from collections import defaultdict, deque
 
 from .models import (
     ASSERTION_ID_REGEX,
@@ -139,18 +140,18 @@ def check_deps_resolve(tl: TaskList) -> list[ValidationError]:
 def check_acyclic(tl: TaskList) -> list[ValidationError]:
     """Kahn's algorithm on the adjacency-list shape."""
     indeg: dict[str, int] = {t.id: 0 for t in tl.tasks}
-    adj: dict[str, list[str]] = {t.id: [] for t in tl.tasks}
+    adj: dict[str, list[str]] = defaultdict(list)
     for task in tl.tasks:
         for dep in task.depends_on:
             if dep in indeg:
                 indeg[task.id] += 1
                 adj[dep].append(task.id)
-    queue = [tid for tid, d in indeg.items() if d == 0]
+    queue = deque([tid for tid, d in indeg.items() if d == 0])
     visited = 0
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         visited += 1
-        for nxt in adj[current]:
+        for nxt in adj.get(current, []):
             indeg[nxt] -= 1
             if indeg[nxt] == 0:
                 queue.append(nxt)
