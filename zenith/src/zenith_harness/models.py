@@ -31,7 +31,6 @@ TaskType = Literal["work", "validate", "gate"]
 TaskStatus = Literal["pending", "running", "cleared", "failed", "superseded"]
 AssertionStatus = Literal["pending", "passed", "failed"]
 
-
 # ---------------------------------------------------------------------------
 # Task / TaskList (orchestrator authors at submit_plan + via TaskListPatch)
 # ---------------------------------------------------------------------------

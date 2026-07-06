@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,6 +48,7 @@ class BridgeSession:
     session_id: str
     cwd: str
     mcp_servers: list[JSON] = field(default_factory=list)
+    created_at: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -425,6 +427,52 @@ def _write_work_handoff(*, done: bool, report: str) -> None:
     )
 
 
+def _session_store_path(cwd: str) -> Path:
+    """Path to persist Jules session metadata."""
+    return Path(cwd) / ".zenith" / "jules_sessions.json"
+
+
+def _load_session_store(cwd: str) -> dict[str, Any]:
+    path = _session_store_path(cwd)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def _save_session_store(cwd: str, store: dict[str, Any]) -> None:
+    path = _session_store_path(cwd)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, store)
+
+
+async def _poll_jules_rest(remote_id: str, cwd: str) -> JulesRemoteState:
+    """Poll an existing Jules task by remote_id until terminal state."""
+    while True:
+        data = await _rest_json("GET", f"{JULES_API_BASE.rstrip('/')}/tasks/{remote_id}")
+        state = _parse_remote_state(remote_id, data)
+        if state.is_terminal:
+            if state.succeeded and not state.pr_url:
+                pulled_url = await _try_extract_pr_url_from_pull(remote_id, cwd)
+                if pulled_url:
+                    return JulesRemoteState(
+                        remote_id=remote_id,
+                        status=state.status,
+                        raw=state.raw,
+                        pr_url=pulled_url,
+                    )
+            return state
+        await asyncio.sleep(STATUS_POLL_SECONDS)
+
+
+async def _send_jules_message(remote_id: str, message: str, cwd: str) -> None:
+    """Send a follow-up message to an existing Jules session via REST API."""
+    create_payload = {"prompt": message}
+    await _rest_json("POST", f"{JULES_API_BASE.rstrip('/')}/tasks/{remote_id}:sendMessage", create_payload)
+
+
 async def _run_prompt(prompt_text: str, cwd: str, *, transport: JsonRpcTransport, session_id: str) -> None:
     if not prompt_text:
         raise BridgeError("empty session/prompt payload")
@@ -533,6 +581,44 @@ class JulesACPBridge:
                     f"fatal: {exc}",
                     message_id="jules-fatal",
                 )
+            await self._transport.respond(request_id, result={"stopReason": "end_turn"})
+            return
+        if method == "jules/converse":
+            # Follow-up message to an existing Jules session
+            remote_id = params.get("remoteId")
+            message = params.get("message")
+            cwd = params.get("cwd") or os.getcwd()
+            if not remote_id or not message:
+                await self._transport.respond(request_id, err="jules/converse requires remoteId and message")
+                return
+            try:
+                await self._transport.notify_session_update(
+                    f"jules-{remote_id}",
+                    f"Sending follow-up to Jules session {remote_id}...",
+                )
+                await _send_jules_message(remote_id, message, cwd)
+                # Poll for response
+                await self._transport.notify_session_update(
+                    f"jules-{remote_id}",
+                    "Waiting for Jules response...",
+                )
+                state = await _poll_jules_rest(remote_id, cwd)
+                if state.succeeded and state.pr_url:
+                    await self._transport.notify_session_update(
+                        f"jules-{remote_id}",
+                        f"Jules updated PR: {state.pr_url}",
+                    )
+                    _write_work_handoff(
+                        done=True,
+                        report=f"Jules follow-up completed. PR: {state.pr_url}",
+                    )
+                else:
+                    _write_work_handoff(
+                        done=False,
+                        report=f"Jules follow-up failed: {state.status}",
+                    )
+            except BridgeError as exc:
+                _write_work_handoff(done=False, report=f"cannot_proceed: {exc}")
             await self._transport.respond(request_id, result={"stopReason": "end_turn"})
             return
         if request_id is not None:
