@@ -19,6 +19,8 @@ import json
 import os
 import re
 import shutil
+import concurrent.futures
+
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -442,6 +444,22 @@ class ProjectStore:
         md_path = self.attempt_report_path(project_id, mission_id, spawn_ts, node_id)
         atomic_write_text(md_path, attempt_to_markdown(handoff))
         return json_path
+
+
+    def save_attempts(
+        self,
+        project_id: str,
+        mission_id: str,
+        items: list[tuple[str, str, WorkHandoff | ValidateHandoff]],
+    ) -> None:
+        def save_one(item: tuple[str, str, WorkHandoff | ValidateHandoff]) -> None:
+            spawn_ts, node_id, handoff = item
+            self.save_attempt(project_id, mission_id, spawn_ts, node_id, handoff)
+
+        workers = min(32, (os.cpu_count() or 1) + 4)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            # list() to force evaluation and wait for completion/errors
+            list(executor.map(save_one, items))
 
     def read_attempt(
         self,

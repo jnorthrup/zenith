@@ -284,15 +284,18 @@ class MissionCoordinator:
         handoffs = self._dispatch_requests(requests)
 
         attention: list[AttentionItemInternal] = []
+        # Batch write all attempts to disk concurrently
+        self.store.save_attempts(
+            self.project_id,
+            mid,
+            [
+                (attempt.spawn_ts, attempt.task.id, handoffs[attempt.task.id])
+                for attempt in sorted(batch_attempts, key=lambda item: item.task.id)
+            ]
+        )
+
         for attempt in sorted(batch_attempts, key=lambda item: item.task.id):
             handoff = handoffs[attempt.task.id]
-            self.store.save_attempt(
-                self.project_id,
-                mid,
-                attempt.spawn_ts,
-                attempt.task.id,
-                handoff,
-            )
             attention.extend(
                 self._apply_handoff_collect(mid, attempt.task, handoff, attempt.spawn_ts)
             )
