@@ -150,6 +150,7 @@ class MissionCoordinator:
         spawn_ts = utc_now_filesafe()
         task_state = self.store.load_task_state(self.project_id, mid)
         task_state.set_status(task.id, "running")
+        task_state.set_priority_respawn(task.id, False)
         task_state.set_last_attempt(task.id, spawn_ts)
         self.store.save_task_state(self.project_id, mid, task_state)
 
@@ -208,7 +209,13 @@ class MissionCoordinator:
                 task_state.status_of(dep) == "cleared" for dep in task.depends_on
             ):
                 runnable.append(task)
-        return runnable
+        priority = [
+            task for task in runnable if task_state.priority_respawn_of(task.id)
+        ]
+        plain = [
+            task for task in runnable if not task_state.priority_respawn_of(task.id)
+        ]
+        return priority + plain
 
     @staticmethod
     def _validator_batch_for_pending_gate(
@@ -266,6 +273,7 @@ class MissionCoordinator:
         for index, task in enumerate(batch):
             spawn_ts = self._batch_spawn_ts(index)
             task_state.set_status(task.id, "running")
+            task_state.set_priority_respawn(task.id, False)
             task_state.set_last_attempt(task.id, spawn_ts)
             batch_attempts.append(
                 _BatchAttempt(task=task, spawn_ts=spawn_ts)
@@ -380,6 +388,8 @@ class MissionCoordinator:
         if task.type == "work":
             if not handoff.done:
                 task_state.set_status(task.id, "failed")
+                if "cannot_proceed" in handoff.report.lower():
+                    task_state.set_priority_respawn(task.id, True)
                 self.store.save_task_state(self.project_id, mid, task_state)
                 assert isinstance(handoff, WorkHandoff)
                 return [attn_factory.node_failed(mid, task, handoff)]

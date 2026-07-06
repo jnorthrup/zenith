@@ -147,6 +147,29 @@ class TestInit:
         assert mcp_env["ZAI_API_KEY"] == "zai-test-key"
         assert "DATABASE_URL" not in mcp_env
 
+    def test_jules_init_creates_missing_workspace_and_stages_prompt(
+        self,
+        runner: CliRunner,
+        tmp_path: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "new-jules-workspace"
+        monkeypatch.setenv("JULES_API_KEY", "jules-test-key")
+
+        r = runner.invoke(cli, ["init", "--workspace-dir", str(target), "--agent", "jules"])
+        assert r.exit_code == 0, r.output
+        assert target.exists()
+        assert (target / ".jules" / "orchestrator_prompt.md").exists()
+
+        mcp = json.loads((target / ".mcp.json").read_text())
+        server = mcp["mcpServers"]["zenith"]
+        assert server["command"] == "uv"
+        assert server["args"] == _expected_mcp_server_args()
+        assert server["env"]["ZENITH_ORCHESTRATOR_PROVIDER"] == "jules"
+        assert server["env"]["ZENITH_WORKER_PROVIDER"] == "jules"
+        assert server["env"]["JULES_API_KEY"] == "jules-test-key"
+
 
 class TestListProjects:
     def test_empty(self, runner: CliRunner, env: dict[str, str]) -> None:

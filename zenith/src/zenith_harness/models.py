@@ -357,6 +357,7 @@ class TaskStateEntry(BaseModel):
 
     status: TaskStatus = "pending"
     last_attempt: str | None = None  # spawn_ts of most recent dispatch
+    priority_respawn: bool = False
 
 
 class TaskStateFile(BaseModel):
@@ -384,6 +385,14 @@ class TaskStateFile(BaseModel):
     def set_last_attempt(self, task_id: str, spawn_ts: str) -> None:
         entry = self.tasks.setdefault(task_id, TaskStateEntry())
         entry.last_attempt = spawn_ts
+
+    def priority_respawn_of(self, task_id: str) -> bool:
+        entry = self.tasks.get(task_id)
+        return entry.priority_respawn if entry else False
+
+    def set_priority_respawn(self, task_id: str, enabled: bool) -> None:
+        entry = self.tasks.setdefault(task_id, TaskStateEntry())
+        entry.priority_respawn = enabled
 
 
 class ContractStateEntry(BaseModel):

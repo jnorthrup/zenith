@@ -159,6 +159,10 @@ def test_augment_acp_command_claude_untouched():
     assert _augment_acp_command("claude-agent-acp", PROVIDERS["claude"]) == "claude-agent-acp"
 
 
+def test_augment_acp_command_jules_untouched():
+    assert _augment_acp_command("jules-acp-bridge", PROVIDERS["jules"]) == "jules-acp-bridge"
+
+
 def test_codex_acp_env_preserves_node_path_when_bwrap_is_present(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

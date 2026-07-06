@@ -3,18 +3,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ProviderName = Literal["claude", "codex", "hermes"]
+ProviderName = Literal["claude", "codex", "hermes", "jules"]
 ConfigFormat = Literal["mcp_json", "codex_config"]
 
 ORCHESTRATOR_PROVIDER_NAMES: tuple[ProviderName, ...] = (
     "claude",
     "codex",
     "hermes",
+    "jules",
 )
 WORKER_PROVIDER_NAMES: tuple[ProviderName, ...] = (
     "claude",
     "codex",
     "hermes",
+    "jules",
 )
 
 
@@ -148,6 +150,17 @@ PROVIDERS: dict[ProviderName, ProviderDefinition] = {
         default_worker_acp_command="hermes acp",
         agent_output_dir=".hermes/agents",
         orchestrator_prompt_output_path=".hermes/orchestrator_prompt.md",
+        acp_supports_system_prompt=True,
+        acp_runtime_mode=None,
+    ),
+    "jules": ProviderDefinition(
+        name="jules",
+        skill_dirs=(".jules/skills", ".agents/skills"),
+        skill_alias_dirs=(".jules/skills", ".agents/skills"),
+        config_format="mcp_json",
+        default_worker_acp_command="jules-acp-bridge",
+        agent_output_dir=".jules/agents",
+        orchestrator_prompt_output_path=".jules/orchestrator_prompt.md",
         acp_supports_system_prompt=True,
         acp_runtime_mode=None,
     ),

@@ -33,6 +33,8 @@ MCP_ENV_FORWARD_ALLOWLIST = (
     "CLAUDE_CODE_SUBAGENT_MODEL",
     "GLM_API_KEY",
     "GLM_BASE_URL",
+    "JULES_API_KEY",
+    "JULES_BASE_URL",
     "MAX_THINKING_TOKENS",
     "ZAI_API_KEY",
     "ZAI_BASE_URL",
@@ -72,7 +74,7 @@ def cli() -> None:
 @click.option("--terminal-reviewer-provider", type=click.Choice(provider_names_for_role("worker")), default=None)
 @click.option("--terminal-reviewer-acp-command", default=None)
 @click.option("--zenith-home", type=click.Path(), default=None)
-@click.option("--workspace-dir", "workspace_dir", type=click.Path(exists=True), default=".")
+@click.option("--workspace-dir", "workspace_dir", type=click.Path(), default=".")
 def init(
     agent: str | None,
     orchestrator_provider: str | None,
@@ -94,6 +96,7 @@ def init(
     workspace stays clean of `.zenith/` until `start_project` runs.
     """
     workspace = Path(workspace_dir).resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
     config = HarnessConfig.discover()
     loader = AssetLoader(config)
     selection = _resolve_selection(
