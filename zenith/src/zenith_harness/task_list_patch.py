@@ -84,31 +84,12 @@ def _rewrite_depends_on(
     return out
 
 
-def apply_patch(
-    tl: TaskList,
-    task_state: TaskStateFile,
-    contract_ids: set[str],
+def _validate_add_items(
     patch: TaskListPatch,
-    *,
-    new_contract_ids_on_disk: set[str] | None = None,
-) -> tuple[TaskList, TaskStateFile, set[str], list[ValidationError]]:
-    """Apply a TaskListPatch.
-
-    `new_contract_ids_on_disk` is the set of ids the runtime sees in
-    `contract/` minus already-known ids. If `None`, we trust `patch.add_items`
-    (used by tests that don't touch disk).
-
-    Returns the patched (task_list, task_state, contract_ids) and any errors.
-    On error, the input objects are returned unchanged.
-    """
-    errors: list[ValidationError] = []
-
-    # 1. At least one op must be non-empty.
-    if patch.is_empty:
-        errors.append(ValidationError("empty_patch", "no ops in TaskListPatch"))
-        return tl, task_state, contract_ids, errors
-
-    # 2. add_items: regex; existence on disk; new-ness; orphan-catching.
+    contract_ids: set[str],
+    new_contract_ids_on_disk: set[str] | None,
+    errors: list[ValidationError],
+) -> None:
     for aid in patch.add_items:
         if not ASSERTION_ID_REGEX.fullmatch(aid):
             errors.append(ValidationError("invalid_assertion_id", aid))
@@ -120,26 +101,31 @@ def apply_patch(
         declared = set(patch.add_items)
         for orphan in sorted(new_contract_ids_on_disk - declared):
             errors.append(ValidationError("undeclared_new_assertion", orphan))
-    if errors:
-        return tl, task_state, contract_ids, errors
 
-    # 3. add: ids unique; no collision with existing tasks.
-    existing_ids = {t.id for t in tl.tasks}
-    new_ids_seen: set[str] = set()
+
+def _validate_add(
+    patch: TaskListPatch,
+    existing_ids: set[str],
+    new_ids_seen: set[str],
+    errors: list[ValidationError],
+) -> None:
     for task in patch.add:
         if task.id in existing_ids:
             errors.append(ValidationError("task_id_collision", task.id))
         if task.id in new_ids_seen:
             errors.append(ValidationError("duplicate_add_task", task.id))
         new_ids_seen.add(task.id)
-    if errors:
-        return tl, task_state, contract_ids, errors
 
-    # 4. supersede + cancel: integrity checks.
-    all_ids = existing_ids | new_ids_seen
-    sealed = _sealed_task_ids(tl, task_state)
 
-    cancel_set = set(patch.cancel)
+def _validate_supersede_cancel(
+    patch: TaskListPatch,
+    task_state: TaskStateFile,
+    existing_ids: set[str],
+    all_ids: set[str],
+    sealed: set[str],
+    cancel_set: set[str],
+    errors: list[ValidationError],
+) -> None:
     supersede_keys = set(patch.supersede.keys())
     if overlap := (cancel_set & supersede_keys):
         errors.append(
@@ -176,6 +162,50 @@ def apply_patch(
             errors.append(ValidationError("unknown_cancel_target", old_id))
             continue
         _check_retirable(task_state, sealed, old_id, errors, op="cancel")
+
+
+def apply_patch(
+    tl: TaskList,
+    task_state: TaskStateFile,
+    contract_ids: set[str],
+    patch: TaskListPatch,
+    *,
+    new_contract_ids_on_disk: set[str] | None = None,
+) -> tuple[TaskList, TaskStateFile, set[str], list[ValidationError]]:
+    """Apply a TaskListPatch.
+
+    `new_contract_ids_on_disk` is the set of ids the runtime sees in
+    `contract/` minus already-known ids. If `None`, we trust `patch.add_items`
+    (used by tests that don't touch disk).
+
+    Returns the patched (task_list, task_state, contract_ids) and any errors.
+    On error, the input objects are returned unchanged.
+    """
+    errors: list[ValidationError] = []
+
+    # 1. At least one op must be non-empty.
+    if patch.is_empty:
+        errors.append(ValidationError("empty_patch", "no ops in TaskListPatch"))
+        return tl, task_state, contract_ids, errors
+
+    # 2. add_items: regex; existence on disk; new-ness; orphan-catching.
+    _validate_add_items(patch, contract_ids, new_contract_ids_on_disk, errors)
+    if errors:
+        return tl, task_state, contract_ids, errors
+
+    # 3. add: ids unique; no collision with existing tasks.
+    existing_ids = {t.id for t in tl.tasks}
+    new_ids_seen: set[str] = set()
+    _validate_add(patch, existing_ids, new_ids_seen, errors)
+    if errors:
+        return tl, task_state, contract_ids, errors
+
+    # 4. supersede + cancel: integrity checks.
+    all_ids = existing_ids | new_ids_seen
+    sealed = _sealed_task_ids(tl, task_state)
+    cancel_set = set(patch.cancel)
+
+    _validate_supersede_cancel(patch, task_state, existing_ids, all_ids, sealed, cancel_set, errors)
     if errors:
         return tl, task_state, contract_ids, errors
 

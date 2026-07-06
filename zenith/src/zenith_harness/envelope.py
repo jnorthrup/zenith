@@ -187,10 +187,14 @@ def _topological_order(
     """
     by_id = {t.id: t for t in visible}
     visible_ids = set(by_id)
+
+    local_statuses = {tid: statuses.get(tid) for tid in visible_ids}
+
     indeg: dict[str, int] = {}
     for tid in visible_ids:
         live_preds = [
-            p for p in preds.get(tid, []) if p in visible_ids and statuses.get(p) != "superseded"
+             p for p in preds.get(tid, []) if p in visible_ids and statuses.get(p) != "superseded"
+ 
         ]
         indeg[tid] = len(live_preds)
 
@@ -199,7 +203,7 @@ def _topological_order(
         if tid not in visible_ids:
             continue
         for p in plist:
-            if p in visible_ids and statuses.get(p) != "superseded":
+            if p in visible_ids and local_statuses[p] != "superseded":
                 successors[p].append(tid)
 
     order_index = {t.id: i for i, t in enumerate(visible)}
