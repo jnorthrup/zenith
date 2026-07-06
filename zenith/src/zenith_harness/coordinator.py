@@ -760,11 +760,18 @@ class MissionCoordinator:
     ) -> StepResult | None:
         attention: list[AttentionItemInternal] = []
         saw_running = False
+
+        # Batch load all attempts once to avoid N+1 queries during reconciliation
+        all_attempts = self.store.list_attempts(self.project_id, mid, node_id=None)
+        attempts_by_node = {}
+        for a in all_attempts:
+            attempts_by_node.setdefault(a.node_id, []).append(a)
+
         for task in tl.tasks:
             if task_state.status_of(task.id) != "running":
                 continue
             saw_running = True
-            attempts = self.store.list_attempts(self.project_id, mid, node_id=task.id)
+            attempts = attempts_by_node.get(task.id, [])
             if not attempts:
                 entry = task_state.tasks.get(task.id)
                 spawn_ts = entry.last_attempt if entry is not None else None
