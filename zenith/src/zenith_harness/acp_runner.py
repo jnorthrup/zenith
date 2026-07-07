@@ -8,6 +8,7 @@ import os
 import socket
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, ClassVar, Coroutine, Literal
@@ -550,6 +551,70 @@ class ACPNodeRunner:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("127.0.0.1", 0))
             return s.getsockname()[1]
+
+    async def run_jules_node(
+        self,
+        project_id: str,
+        mission_id: str,
+        task: Task,
+        spawn_ts: str,
+        store: ProjectStore,
+        *,
+        cwd: str | Path | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> NodeHandoff:
+        """Run a node via Jules ACP bridge (in-process, no subprocess).
+
+        Sets ZENITH_HANDOFF_PATH so _run_prompt writes the handoff file directly.
+        """
+        from .jules_acp_bridge import (
+            BridgeError,
+            JsonRpcTransport,
+            _run_prompt,
+            _write_work_handoff,
+        )
+
+        workspace_dir = str(Path(cwd).expanduser().resolve() if cwd else store.workspace_dir(project_id))
+        handoff_path = store.attempt_path(project_id, mission_id, spawn_ts, task.id)
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Set env so _run_prompt writes the handoff to the right place.
+        os.environ["ZENITH_HANDOFF_PATH"] = str(handoff_path)
+        os.environ["ZENITH_HOME"] = str(self.config.harness_home)
+        os.environ["ZENITH_NODE_ID"] = task.id
+        os.environ["ZENITH_NODE_TYPE"] = task.type
+        os.environ["ZENITH_PROJECT_ID"] = project_id
+        os.environ["ZENITH_MISSION_ID"] = mission_id
+
+        # Render the first prompt (same template used by run_node).
+        first_message = self._render_prompts(
+            task=task,
+            mission_id=mission_id,
+            project_bucket=str(store.zenith_dir(project_id)),
+            workspace_dir=workspace_dir,
+            store=store,
+            project_id=project_id,
+        )
+
+        transport = JsonRpcTransport()
+        session_id = f"jules-{uuid.uuid4().hex[:12]}" if False else "jules-inline"
+        try:
+            await _run_prompt(first_message, workspace_dir, transport=transport, session_id=session_id)
+        except BridgeError as exc:
+            _write_work_handoff(done=False, report=f"cannot_proceed: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            _write_work_handoff(done=False, report=f"jules node error: {exc}")
+
+        if handoff_path.exists():
+            return self._parse_handoff_file(handoff_path, task)
+        return self._synthesize_and_persist_missing_handoff(
+            handoff_path=handoff_path,
+            task=task,
+            stop_reason=None,
+            exit_code=None,
+            stderr="",
+            session_error=None,
+        )
 
     async def run_node(
         self,
@@ -1183,6 +1248,17 @@ class ACPNodeDispatcher:
         self.runner = ACPNodeRunner(config=config, loader=self.loader)
 
     def dispatch(self, request: DispatchRequest) -> NodeHandoff:
+        if self.config.worker_provider_name == "jules":
+            return _run_coro_blocking(
+                self.runner.run_jules_node(
+                    project_id=request.project_id,
+                    mission_id=request.mission_id,
+                    task=request.task,
+                    spawn_ts=request.spawn_ts,
+                    store=self.store,
+                    cwd=request.cwd,
+                )
+            )
         return _run_coro_blocking(
             self.runner.run_node(
                 project_id=request.project_id,
@@ -1196,22 +1272,36 @@ class ACPNodeDispatcher:
 
     def dispatch_batch(self, requests: list[DispatchRequest]) -> list[NodeHandoff]:
         async def _run_all() -> list[NodeHandoff]:
-            results = await asyncio.gather(
-                *(
-                    self.runner.run_node(
-                        project_id=request.project_id,
-                        mission_id=request.mission_id,
-                        task=request.task,
-                        spawn_ts=request.spawn_ts,
-                        store=self.store,
-                        cwd=request.cwd,
-                    )
-                    for request in requests
-                ),
-                return_exceptions=True,
-            )
+            jules, others = [], []
+            for req in requests:
+                (jules if self.config.worker_provider_name == "jules" else others).append(req)
+
+            jules_tasks = [
+                self.runner.run_jules_node(
+                    project_id=r.project_id,
+                    mission_id=r.mission_id,
+                    task=r.task,
+                    spawn_ts=r.spawn_ts,
+                    store=self.store,
+                    cwd=r.cwd,
+                )
+                for r in jules
+            ]
+            other_tasks = [
+                self.runner.run_node(
+                    project_id=r.project_id,
+                    mission_id=r.mission_id,
+                    task=r.task,
+                    spawn_ts=r.spawn_ts,
+                    store=self.store,
+                    cwd=r.cwd,
+                )
+                for r in others
+            ]
+            results = await asyncio.gather(*(jules_tasks + other_tasks), return_exceptions=True)
+            all_requests = jules + others
             handoffs: list[NodeHandoff] = []
-            for request, result in zip(requests, results, strict=True):
+            for request, result in zip(all_requests, results, strict=True):
                 if isinstance(result, BaseException):
                     handoffs.append(
                         self.runner._synthesize_missing_handoff(
