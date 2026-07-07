@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import click
@@ -39,6 +40,78 @@ MCP_ENV_FORWARD_ALLOWLIST = (
     "ZAI_API_KEY",
     "ZAI_BASE_URL",
 )
+
+BUILD_SHA_MARKER = ".zenith-build-sha"
+
+
+def _current_build_sha() -> str:
+    """Best-effort git SHA for the running Zenith.
+
+    Falls back to a monotonic counter when not in a git checkout. The result
+    is stable across repeated calls within the same process.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(Path(__file__).resolve().parents[1]),
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return "no-git"
+
+
+def _read_workspace_sha(workspace: Path) -> str | None:
+    marker = workspace / BUILD_SHA_MARKER
+    if not marker.exists():
+        return None
+    try:
+        return marker.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def _phase_stale_zenith_artifacts(workspace: Path, selection: ProviderSelection) -> None:
+    """Remove prior Zenith-written artifacts so they can be rewritten cleanly.
+
+    Only deletes paths Zenith itself writes. Host-authored files are left alone:
+    only the closest parent directory *owned* by Zenith (agents/out, skills, the
+    orchestrator-prompt file itself) is removed — not the entire `.claude/` /
+    `.codex/` / `.jules/` root, which may contain user-authored configs.
+    """
+    targets: list[Path] = []
+    providers = selection.providers()
+    for provider in providers:
+        if not provider.agent_output_dir:
+            continue
+        agents_dir = (workspace / provider.agent_output_dir).resolve()
+        if agents_dir.exists():
+            targets.append(agents_dir)
+        for rel in provider.skill_dirs:
+            sd = (workspace / rel).resolve()
+            if sd.exists():
+                targets.append(sd)
+        if provider.orchestrator_prompt_output_path:
+            ppath = (workspace / provider.orchestrator_prompt_output_path).resolve()
+            if ppath.exists() and ppath.is_file():
+                targets.append(ppath)
+    for p in targets:
+        try:
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            elif p.is_file():
+                p.unlink()
+        except OSError:
+            pass
+
+
+def _write_workspace_sha(workspace: Path, sha: str) -> None:
+    (workspace / BUILD_SHA_MARKER).write_text(sha + "\n", encoding="utf-8")
 
 
 @click.group()
@@ -110,6 +183,14 @@ def init(
         terminal_reviewer_acp_command=terminal_reviewer_acp_command,
     )
 
+    current_sha = _current_build_sha()
+    prior_sha = _read_workspace_sha(workspace)
+    if prior_sha is not None and prior_sha != current_sha:
+        click.echo(
+            f"Zenith build changed ({prior_sha} -> {current_sha}); replacing prior artifacts"
+        )
+        _phase_stale_zenith_artifacts(workspace, selection)
+
     # 1) MCP / Codex config
     storage_env = _storage_env(zenith_home=zenith_home, workspace=workspace, selection=selection)
     _write_bootstrap_config(workspace, selection, storage_env)
@@ -118,11 +199,17 @@ def init(
     for provider in selection.providers():
         _setup_provider_assets(workspace, loader, provider)
 
+    # 3) Bundled skills installer (idempotent — only writes if missing)
+    _install_bundled_skills(workspace, loader)
+
+    _write_workspace_sha(workspace, current_sha)
+
     click.echo(
         f"\nInitialized v5 project workspace at {workspace}: "
         f"orchestrator={selection.orchestrator.name}, "
         f"worker={selection.worker.name}, "
-        f"validator={selection.resolved_validation_worker.name}."
+        f"validator={selection.resolved_validation_worker.name}. "
+        f"build={current_sha}"
     )
     click.echo(
         "Bucket lives at $ZENITH_HOME/projects/<pid>/ — created on the first "
@@ -261,6 +348,35 @@ def _copy_skills(loader: AssetLoader, target: Path) -> None:
         dest = target / skill_dir.name
         dest.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_dir / "SKILL.md", dest / "SKILL.md")
+
+
+def _install_bundled_skills(workspace: Path, loader: AssetLoader) -> int:
+    """Install bundled skills into per-provider skill dirs.
+
+    Mirrors `_setup_provider_assets` so `init` runs the skills installer even
+    if no `--agent` was passed (we still need host agents to discover skills).
+    Idempotent — skills are only written if their SKILL.md is missing.
+    Returns the number of skill dirs populated.
+    """
+    installed = 0
+    seen: set[Path] = set()
+    for provider_name in provider_names_for_role("orchestrator"):
+        try:
+            provider = get_provider(provider_name)
+        except (KeyError, ValueError):
+            continue
+        if not provider.agent_output_dir:
+            continue
+        for rel in provider.skill_dirs:
+            dest = (workspace / rel).resolve()
+            if dest in seen:
+                continue
+            seen.add(dest)
+            if not dest.exists() or not any(dest.glob("*/SKILL.md")):
+                _copy_skills(loader, dest)
+                click.echo(f"Installed bundled skills to {dest}")
+            installed += 1
+    return installed
 
 
 def _echo_next_steps(orchestrator: ProviderDefinition) -> None:

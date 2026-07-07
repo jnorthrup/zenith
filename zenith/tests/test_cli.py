@@ -170,6 +170,78 @@ class TestInit:
         assert server["env"]["ZENITH_WORKER_PROVIDER"] == "jules"
         assert server["env"]["JULES_API_KEY"] == "jules-test-key"
 
+    def test_writes_build_sha_marker(
+        self,
+        runner: CliRunner,
+        workspace: Path,
+        env: dict[str, str],
+    ) -> None:
+        r = runner.invoke(
+            cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"]
+        )
+        assert r.exit_code == 0, r.output
+        marker = workspace / ".zenith-build-sha"
+        assert marker.exists()
+        contents = marker.read_text(encoding="utf-8").strip()
+        assert contents
+        assert "build=" in r.output and contents in r.output
+
+    def test_replaces_artifacts_when_sha_changes(
+        self,
+        runner: CliRunner,
+        workspace: Path,
+        env: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # First init writes current SHA
+        r1 = runner.invoke(
+            cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"]
+        )
+        assert r1.exit_code == 0, r1.output
+        marker = workspace / ".zenith-build-sha"
+        first_sha = marker.read_text(encoding="utf-8").strip()
+
+        # Plant a stale host-authored file the replace must NOT delete
+        keep = workspace / ".claude" / "housesettings.local.json"
+        keep.parent.mkdir(parents=True, exist_ok=True)
+        keep.write_text('{"user":"local"}', encoding="utf-8")
+
+        # Inject foreign agents we expect replaced
+        agents = workspace / ".claude" / "agents"
+        agents.mkdir(parents=True, exist_ok=True)
+        stale_agent = agents / "stale-review.toml"
+        stale_agent.write_text("# stale\n", encoding="utf-8")
+
+        # Monkey-patch the build-SHA function so the second init sees a different SHA
+        from zenith_harness import cli as cli_mod
+        monkeypatch.setattr(
+            cli_mod, "_current_build_sha", lambda: "deadbeef0001"
+        )
+        r2 = runner.invoke(
+            cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"]
+        )
+        assert r2.exit_code == 0, r2.output
+        assert "replacing prior artifacts" in r2.output
+        assert stale_agent.exists() is False
+        # Host-authored file under the provider dir is *not* deleted
+        assert keep.exists()
+        # Marker reflects the new SHA
+        assert marker.read_text(encoding="utf-8").strip() == "deadbeef0001"
+
+
+class TestBuildSha:
+    def test_current_build_sha_returns_string(
+        self, workspace: Path, env: dict[str, str]
+    ) -> None:
+        from zenith_harness.cli import _current_build_sha, _read_workspace_sha, _write_workspace_sha
+        sha = _current_build_sha()
+        assert isinstance(sha, str) and sha
+        _write_workspace_sha(workspace, sha)
+        assert _read_workspace_sha(workspace) == sha
+        bogus = workspace / ".zenith-build-sha"
+        bogus.write_text("\n", encoding="utf-8")
+        assert _read_workspace_sha(workspace) is None
+
 
 class TestListProjects:
     def test_empty(self, runner: CliRunner, env: dict[str, str]) -> None:
