@@ -21,10 +21,6 @@ Audit these assigned contract files:
 
 {{ contract_target_paths }}
 
-## Assertions To Audit
-
-{{ contract_assertions }}
-
 ## Prior Work
 
 Prior attempt reports:

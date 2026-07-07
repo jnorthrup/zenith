@@ -1,0 +1,1 @@
+/Users/jim/.zenith/projects/20260706T151115Z-zenith-project-should-be-able-to-prime-the-longterm-terrain-usin/.zenith/AGENTS.md

@@ -14,6 +14,7 @@ Attempt filenames keep the `<ts>__<node_id>.json` token for on-disk continuity
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -358,6 +359,15 @@ class TaskStateEntry(BaseModel):
     last_attempt: str | None = None  # spawn_ts of most recent dispatch
     priority_respawn: bool = False
 
+    # Coalesced attempt counters — avoid list_attempts() + parse for decisions.
+    attempt_count: int = 0
+    success_count: int = 0
+    last_done_at: str | None = None  # ISO timestamp of last successful handoff
+
+    # Progress locale fingerprint — cheap hash of git HEAD + touched-file mtimes
+    # at the time of the last attempt. Used to assess staleness of old attempts.
+    last_workspace_fingerprint: str | None = None
+
 
 class TaskStateFile(BaseModel):
     """Live cursor: per-task status. HARNESS bucket.
@@ -384,6 +394,20 @@ class TaskStateFile(BaseModel):
     def set_last_attempt(self, task_id: str, spawn_ts: str) -> None:
         entry = self.tasks.setdefault(task_id, TaskStateEntry())
         entry.last_attempt = spawn_ts
+
+    def record_attempt(self, task_id: str, spawn_ts: str, *, success: bool) -> None:
+        """Record a coalesced attempt outcome. Call once per handoff."""
+        entry = self.tasks.setdefault(task_id, TaskStateEntry())
+        entry.last_attempt = spawn_ts
+        entry.attempt_count += 1
+        if success:
+            entry.success_count += 1
+            entry.last_done_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    def attempt_stats(self, task_id: str) -> tuple[int, int]:
+        """Return (attempt_count, success_count) for a task."""
+        entry = self.tasks.get(task_id)
+        return (entry.attempt_count, entry.success_count) if entry else (0, 0)
 
     def priority_respawn_of(self, task_id: str) -> bool:
         entry = self.tasks.get(task_id)

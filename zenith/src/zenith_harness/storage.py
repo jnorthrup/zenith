@@ -53,6 +53,64 @@ def utc_now_filesafe() -> str:
     return utc_now_iso().replace(":", "-")
 
 
+def workspace_fingerprint(workspace: str | Path) -> str:
+    """Cheap progress-locale fingerprint: git HEAD + mtime of most-recent
+    source file. Two attempts against the same fingerprint produced the same
+    result; a changed fingerprint means the workspace moved on and the old
+    attempt is stale.
+
+    Falls back to directory mtime if not a git repo.
+    """
+    import hashlib
+    import subprocess
+
+    ws = Path(workspace)
+    h = hashlib.sha256()
+
+    # Git HEAD commit (cheapest signal)
+    git_dir = ws / ".git"
+    if git_dir.exists():
+        try:
+            head_file = git_dir / "HEAD"
+            if head_file.exists():
+                h.update(b"HEAD:")
+                h.update(head_file.read_bytes().strip())
+            # Include current branch ref
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(ws),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                h.update(b"COMMIT:")
+                h.update(result.stdout.strip().encode())
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    # Newest source file mtime (covers non-git dirs and uncommitted changes)
+    try:
+        newest = 0.0
+        for pattern in ("**/*.py", "**/*.kt", "**/*.kts", "**/*.ts", "**/*.js"):
+            for f in ws.glob(pattern):
+                if ".git" in f.parts or "build" in f.parts or ".gradle" in f.parts:
+                    continue
+                try:
+                    mtime = f.stat().st_mtime
+                    if mtime > newest:
+                        newest = mtime
+                except OSError:
+                    continue
+        if newest > 0:
+            h.update(b"MTIME:")
+            h.update(str(int(newest)).encode())
+    except OSError:
+        pass
+
+    return h.hexdigest()[:16]
+
+
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -460,6 +518,8 @@ class ProjectStore:
         project_id: str,
         mission_id: str,
         node_id: str | None = None,
+        *,
+        include_tombstones: bool = False,
     ) -> list[AttemptRecord]:
         d = self.attempts_runtime_dir(project_id, mission_id)
         if not d.exists():
@@ -473,7 +533,115 @@ class ProjectStore:
             if node_id is not None and nid != node_id:
                 continue
             results.append(AttemptRecord(spawn_ts=ts, node_id=nid, path=entry))
+        # Tombstoned attempts live in a sibling dir; include only when asked.
+        if include_tombstones:
+            tomb_dir = d / "tombstones"
+            if tomb_dir.exists():
+                for entry in sorted(tomb_dir.glob("*.json")):
+                    stem = entry.stem
+                    if "__" not in stem:
+                        continue
+                    ts, nid = stem.split("__", 1)
+                    if node_id is not None and nid != node_id:
+                        continue
+                    results.append(AttemptRecord(spawn_ts=ts, node_id=nid, path=entry))
         return results
+
+    def tombstone_attempt(
+        self,
+        project_id: str,
+        mission_id: str,
+        spawn_ts: str,
+        node_id: str,
+    ) -> bool:
+        """Move an attempt (JSON + MD mirror) into the tombstone directory.
+
+        Returns True if any file was moved. Idempotent — a missing attempt
+        is a no-op. Tombstoned attempts are excluded from list_attempts()
+        unless include_tombstones=True.
+        """
+        import shutil
+
+        moved = False
+        json_src = self.attempt_path(project_id, mission_id, spawn_ts, node_id)
+        md_src = self.attempt_report_path(project_id, mission_id, spawn_ts, node_id)
+        tomb_json = json_src.parent / "tombstones" / json_src.name
+        tomb_md = self.attempts_dir(project_id, mission_id) / "tombstones" / md_src.name
+        if json_src.exists():
+            tomb_json.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(json_src), str(tomb_json))
+            moved = True
+        if md_src.exists():
+            tomb_md.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(md_src), str(tomb_md))
+            moved = True
+        return moved
+
+    def sweep_stale_attempts(
+        self,
+        project_id: str,
+        mission_id: str,
+        *,
+        max_age_days: int = 7,
+        max_per_node: int = 5,
+    ) -> int:
+        """Tombstone attempts that are too old or exceed the per-node cap.
+
+        Rule: tombstone when age > max_age_days OR attempt_count_for_node >
+        max_per_node. Keeps the coalesced counters in TaskStateEntry as the
+        numerical record; raw files become forensic detail under tombstones/.
+
+        Returns the number of attempts tombstoned.
+        """
+        from datetime import timedelta
+
+        all_attempts = self.list_attempts(
+            project_id, mission_id, include_tombstones=False
+        )
+        if not all_attempts:
+            return 0
+
+        # Group by node_id to enforce per-node cap
+        by_node: dict[str, list[AttemptRecord]] = {}
+        for rec in all_attempts:
+            by_node.setdefault(rec.node_id, []).append(rec)
+
+        tombstone_count = 0
+        now = datetime.now(UTC)
+
+        for node_id, records in by_node.items():
+            # Sort newest-first; excess attempts at the tail get tombstoned
+            records.sort(key=lambda r: r.spawn_ts, reverse=True)
+            # Enforce per-node cap: keep newest max_per_node, tombstone rest
+            if len(records) > max_per_node:
+                for rec in records[max_per_node:]:
+                    if self.tombstone_attempt(
+                        project_id, mission_id, rec.spawn_ts, rec.node_id
+                    ):
+                        tombstone_count += 1
+            # Enforce age threshold on the remaining records
+            for rec in records[:max_per_node]:
+                try:
+                    rec_dt = datetime.fromisoformat(
+                        rec.spawn_ts.replace("Z", "+00:00").replace("-", ":", 2)
+                    )
+                    # spawn_ts is filesafe (colons→hyphens); fix the time portion
+                    parts = rec.spawn_ts.split("T")
+                    if len(parts) == 2:
+                        time_part = parts[1].replace("-", ":")
+                        rec_dt = datetime.fromisoformat(
+                            f"{parts[0]}T{time_part}+00:00"
+                        )
+                    age = now - rec_dt
+                    if age > timedelta(days=max_age_days):
+                        if self.tombstone_attempt(
+                            project_id, mission_id, rec.spawn_ts, rec.node_id
+                        ):
+                            tombstone_count += 1
+                except (ValueError, TypeError):
+                    continue
+
+        return tombstone_count
 
     @staticmethod
     def _parse_attempt(path: Path) -> WorkHandoff | ValidateHandoff:

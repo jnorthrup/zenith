@@ -29,11 +29,12 @@ from .models import (
     MissionRunning,
     Task,
     TaskList,
+    TaskStateEntry,
     TaskStateFile,
     ValidateHandoff,
     WorkHandoff,
 )
-from .storage import ProjectStore, utc_now_filesafe
+from .storage import ProjectStore, utc_now_filesafe, workspace_fingerprint
 from .envelope import public_attention_items
 
 
@@ -385,18 +386,35 @@ class MissionCoordinator:
         contract_state = self.store.load_contract_state(self.project_id, mid)
         attention: list[AttentionItemInternal] = []
 
+        # Progress-locale fingerprint for this attempt
+        ws_fp = workspace_fingerprint(self.store.workspace_dir(self.project_id))
+
         if task.type == "work":
             if not handoff.done:
                 task_state.set_status(task.id, "failed")
+                task_state.record_attempt(task.id, spawn_ts, success=False)
+                # Update workspace fingerprint on failed attempt too (shows attempt made)
+                entry = task_state.tasks.setdefault(task.id, TaskStateEntry())
+                entry.last_workspace_fingerprint = ws_fp
                 if "cannot_proceed" in handoff.report.lower():
                     task_state.set_priority_respawn(task.id, True)
                 self.store.save_task_state(self.project_id, mid, task_state)
                 assert isinstance(handoff, WorkHandoff)
                 return [attn_factory.node_failed(mid, task, handoff)]
             task_state.set_status(task.id, "cleared")
+            task_state.record_attempt(task.id, spawn_ts, success=True)
+            entry = task_state.tasks.setdefault(task.id, TaskStateEntry())
+            entry.last_workspace_fingerprint = ws_fp
             self.store.save_task_state(self.project_id, mid, task_state)
         elif task.type == "validate":
             task_state.set_status(task.id, "cleared")
+            # For validate, success = all items passed
+            success = True
+            if isinstance(handoff, ValidateHandoff):
+                success = all(item.passed for item in handoff.items)
+            task_state.record_attempt(task.id, spawn_ts, success=success)
+            entry = task_state.tasks.setdefault(task.id, TaskStateEntry())
+            entry.last_workspace_fingerprint = ws_fp
             self.store.save_task_state(self.project_id, mid, task_state)
             if isinstance(handoff, ValidateHandoff):
                 for item in handoff.items:

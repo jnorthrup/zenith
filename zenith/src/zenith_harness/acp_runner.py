@@ -35,6 +35,10 @@ SUBPROCESS_STREAM_LIMIT = int(
     )
 )
 
+# Context window budget for worker prompts — max chars per contract assertion inline.
+CONTRACT_INLINE_MAX = int(os.environ.get("ZENITH_CONTRACT_INLINE_MAX", "2000"))
+CONTRACT_TRUNCATE_PREVIEW = int(os.environ.get("ZENITH_CONTRACT_TRUNCATE_PREVIEW", "500"))
+
 
 # ---------------------------------------------------------------------------
 # Helpers (carried over from stable_version)
@@ -1013,107 +1017,35 @@ class ACPNodeRunner:
             },
         )
 
-    def _build_template_vars(
-        self,
-        *,
-        task: Task,
-        mission_id: str,
-        project_bucket: str,
-        workspace_dir: str,
-        store: ProjectStore,
-        project_id: str,
-    ) -> dict[str, str]:
-        assertions: list[str] = []
-        target_rows: list[str] = []
-        for aid in task.targets:
-            contract_p = store.contract_assertion_path(project_id, mission_id, aid)
-            target_rows.append(f"- **{aid}**: `{contract_p}`")
-            body = store.load_contract_assertion(project_id, mission_id, aid)
-            if body is None:
-                assertions.append(f"[Missing contract assertion {aid} at {contract_p}]\n")
-                continue
-            assertions.append(body.rstrip() + "\n")
-        target_paths = "\n".join(target_rows) if target_rows else ""
-        mission_dir = store.mission_dir(project_id, mission_id)
-        project_bucket_path = Path(project_bucket)
-        agents_path = Path(workspace_dir) / "AGENTS.md"
-        return {
-            "assignment_body": task.body,
-            "contract_target_paths": target_paths,
-            "memory_path": str(project_bucket_path / "MEMORY.md"),
-            "mission_scope_path": str(mission_dir / "SCOPE.md"),
-            "agents_path": str(agents_path),
-            "attempts_dir": str(store.attempts_dir(project_id, mission_id)),
-            # Legacy names are retained for validator templates and provider
-            # prompts that have not yet been migrated from node vocabulary.
-            "node_id": task.id,
-            "node_type": task.type,
-            "node_body": task.body,
-            "node_targets": ", ".join(task.targets),
-            "skill_name": task.skill or "",
-            "workspace": workspace_dir,
-            "project_bucket": project_bucket,
-            "mission_id": mission_id,
-            "contract_assertions": "\n\n---\n\n".join(assertions),
-            "target_paths": target_paths,
-            "regressions_dir": str(store.regressions_dir(project_id, mission_id)),
-            "evidence_dir": str(mission_dir / "evidence"),
-        }
+    # ---------------------------------------------------------------------------
+# Contract assertion truncation helpers
+# ---------------------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Handoff parsing + synthesis
-    # ------------------------------------------------------------------
 
-    def _parse_handoff_file(self, path: Path, task: Task) -> NodeHandoff:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        if task.type == "validate":
-            return ValidateHandoff.model_validate(data)
-        return WorkHandoff.model_validate(data)
+def _truncate_contract_assertion(body: str, path: str) -> str:
+    """Return inline-ready contract body with truncation marker if over limit."""
+    if len(body) <= CONTRACT_INLINE_MAX:
+        return body.rstrip() + "\n"
+    preview = body[:CONTRACT_TRUNCATE_PREVIEW].rstrip()
+    return (
+        f"{preview}\n\n"
+        f"--- TRUNCATED ({len(body)} chars, read full at `{path}`) ---\n"
+    )
 
-    def _synthesize_missing_handoff(
-        self, task: Task, *, summary: str = ""
-    ) -> NodeHandoff:
-        report = summary or "Agent session ended without calling end_node."
-        if task.type == "validate":
-            return ValidateHandoff(
-                node_id=task.id, done=False, report=report, items=[], passed=False
-            )
-        return WorkHandoff(
-            node_id=task.id,
-            done=False,
-            report=report,
-            request_attention=False,
-        )
 
-    def _synthesize_and_persist_missing_handoff(
-        self,
-        *,
-        handoff_path: Path,
-        task: Task,
-        stop_reason: str | None,
-        exit_code: int | None,
-        stderr: str,
-        session_error: str | None,
-    ) -> NodeHandoff:
-        parts: list[str] = ["Agent session ended without calling end_node."]
-        if session_error:
-            parts.append(f"acp_error={session_error}")
-        if stop_reason:
-            parts.append(f"stop_reason={stop_reason}")
-        if exit_code is not None:
-            parts.append(f"exit_code={exit_code}")
-        if stderr:
-            parts.append(f"stderr={stderr}")
-        summary = " ".join(parts)
-        handoff = self._synthesize_missing_handoff(task, summary=summary)
-        atomic_write_json(handoff_path, handoff.model_dump(mode="json"))
-        return handoff
+def _format_attempts_dir_hint(attempts_dir: str) -> str:
+    """Render a context-aware attempts directory hint for the worker prompt."""
+    return (
+        f"{attempts_dir}\n"
+        f"(Read only the most recent 1-2 attempt reports relevant to your targets; "
+        f"do not load the entire history.)"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Production NodeDispatcher / TerminalReviewer wrappers
+# ACP Node Runner
 # ---------------------------------------------------------------------------
+
 
 
 def _run_coro_blocking(coro: Coroutine[Any, Any, Any]) -> Any:
