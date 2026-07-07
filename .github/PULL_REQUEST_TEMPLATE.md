@@ -2,9 +2,14 @@
 
 <!-- What does this PR change, and why? -->
 
-## Checklist
+## Scope
 
-- [ ] `uv run ruff check .` passes
-- [ ] `uv run mypy src` passes
-- [ ] `uv run pytest -q` passes
-- [ ] Tests added/updated for behavior changes
+<!-- What does this PR touch? What does it NOT touch? -->
+
+## Evidence
+
+<!-- Test output, screenshots, or verification steps proving it works. -->
+
+## Non-goals
+
+<!-- What is intentionally NOT in scope. -->
