@@ -721,6 +721,73 @@ class ACPNodeRunner:
             session_error=session_error,
         )
 
+    # ------------------------------------------------------------------
+    # Missing handoff synthesis methods (called from run_node and dispatch_batch)
+    # ------------------------------------------------------------------
+
+    def _parse_handoff_file(self, handoff_path: Path, task: Task) -> NodeHandoff:
+        """Parse a handoff file written by the worker MCP server."""
+        import json
+        raw = handoff_path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        if isinstance(data, dict) and ("items" in data or "passed" in data):
+            return ValidateHandoff.model_validate(data)
+        return WorkHandoff.model_validate(data)
+
+    def _synthesize_missing_handoff(self, task: Task, summary: str) -> NodeHandoff:
+        """Synthesize a failure handoff when worker crashes or times out."""
+        if task.type == "validate":
+            return ValidateHandoff(
+                node_id=task.id,
+                done=False,
+                report=summary,
+                items=[],
+                passed=False,
+                request_attention=False,
+            )
+        return WorkHandoff(
+            node_id=task.id,
+            done=False,
+            report=summary,
+            request_attention=False,
+        )
+
+    def _synthesize_and_persist_missing_handoff(
+        self,
+        handoff_path: Path,
+        task: Task,
+        *,
+        stop_reason: str | None,
+        exit_code: int | None,
+        stderr: str,
+        session_error: str | None,
+    ) -> NodeHandoff:
+        """Synthesize a handoff when the worker exited without writing one."""
+        parts = ["Worker exited without producing a handoff."]
+        if stop_reason:
+            parts.append(f"Stop reason: {stop_reason}")
+        if exit_code is not None:
+            parts.append(f"Exit code: {exit_code}")
+        if session_error:
+            parts.append(f"Session error: {session_error}")
+        if stderr:
+            parts.append(f"Stderr: {stderr[:500]}")
+        summary = "\n".join(parts)
+
+        handoff = self._synthesize_missing_handoff(task, summary)
+
+        # Persist to disk for forensic trail
+        try:
+            import json
+            handoff_path.write_text(
+                json.dumps(handoff.model_dump(mode="json"), indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+        return handoff
+
     async def run_terminal_review(
         self,
         project_id: str,
@@ -891,6 +958,12 @@ class ACPNodeRunner:
         env["ZENITH_NODE_ID"] = task.id
         env["ZENITH_NODE_TYPE"] = task.type
         env["ZENITH_HANDOFF_PATH"] = handoff_path
+        # Ensure subprocess uses the local source tree (editable install fallback)
+        src_root = str(Path(__file__).parent.parent.parent.parent)
+        if "PYTHONPATH" in env:
+            env["PYTHONPATH"] = src_root + ":" + env["PYTHONPATH"]
+        else:
+            env["PYTHONPATH"] = src_root
         return await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -926,6 +999,12 @@ class ACPNodeRunner:
         env["ZENITH_PROJECT_ID"] = project_id
         env["ZENITH_MISSION_ID"] = mission_id
         env["ZENITH_TERMINAL_REVIEW_PATH"] = report_path
+        # Ensure subprocess uses the local source tree (editable install fallback)
+        src_root = str(Path(__file__).parent.parent.parent.parent)
+        if "PYTHONPATH" in env:
+            env["PYTHONPATH"] = src_root + ":" + env["PYTHONPATH"]
+        else:
+            env["PYTHONPATH"] = src_root
         return await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -999,6 +1078,33 @@ class ACPNodeRunner:
         if system_prompt:
             return system_prompt + "\n\n---\n\n" + template
         return template
+
+    def _build_template_vars(
+        self,
+        *,
+        task: Task,
+        mission_id: str,
+        project_bucket: str,
+        workspace_dir: str,
+        store: ProjectStore,
+        project_id: str,
+    ) -> dict[str, Any]:
+        """Build template variables for worker/validator prompt templates."""
+        attempts_dir = str(store.attempts_dir(project_id, mission_id))
+        agents_path = str(Path(project_bucket) / "agents")
+        memory_path = str(Path(project_bucket) / "MEMORY.md")
+        contract_target_paths = "\n".join(f"- `{t}`" for t in task.targets)
+        skill_name = task.skill or "none"
+        assignment_body = task.body
+
+        return {
+            "assignment_body": assignment_body,
+            "skill_name": skill_name,
+            "agents_path": agents_path,
+            "memory_path": memory_path,
+            "contract_target_paths": contract_target_paths,
+            "attempts_dir": attempts_dir,
+        }
 
     def _render_terminal_reviewer_prompts(
         self,

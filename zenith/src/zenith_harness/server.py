@@ -25,6 +25,7 @@ from .models import (
     ValidationItem,
     WorkHandoff,
 )
+from .jules_acp_bridge import JulesACPBridge
 from .storage import atomic_write_json
 
 logger = logging.getLogger(__name__)
@@ -55,8 +56,9 @@ def create_orchestrator_server(
         name="zenith",
         instructions=(
             "Mission orchestration harness. Mode: orchestrator. "
-            "7 tools: start_project, submit_plan, advance_project, "
-            "end_mission, decide_attention, inspect_project, abort_project. "
+            "9 tools: start_project, submit_plan, advance_project, "
+            "end_mission, decide_attention, inspect_project, abort_project, "
+            "jules_converse, jules_bijective_sync. "
             "Lifecycle: plan with submit_plan, run with advance_project, "
             "request closure with end_mission, resolve attention with decide_attention, "
             "then call advance_project again."
@@ -281,6 +283,71 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
             except ToolError as exc:
                 return _to_payload(exc)
 
+    @mcp.tool(
+        name="jules_converse",
+        description=(
+            "Send a follow-up message to an existing Jules remote session. "
+            "Bijective sync: forwards message to Jules REST API, polls for terminal state, "
+            "returns updated PR URL. Use for latent goal telegraphing at mating points."
+        ),
+    )
+    async def jules_converse(
+        project_id: Annotated[str, Field(description="Project id.")],
+        remote_id: Annotated[str, Field(description="Jules remote session/task ID.")],
+        message: Annotated[str, Field(description="Follow-up prompt for Jules.")],
+    ) -> dict[str, Any]:
+        try:
+            cwd = str(controller.store.workspace_dir(project_id))
+            from .jules_acp_bridge import _send_jules_message, _poll_jules_rest
+            await _send_jules_message(remote_id, message, cwd)
+            state = await _poll_jules_rest(remote_id, cwd)
+            return {
+                "remote_id": remote_id,
+                "status": state.status,
+                "pr_url": state.pr_url,
+                "succeeded": state.succeeded,
+            }
+        except Exception as exc:
+            return {
+                "error": "jules_converse_failed",
+                "message": str(exc),
+            }
+
+    @mcp.tool(
+        name="jules_bijective_sync",
+        description=(
+            "Bijective sync between Jules remote state and Zenith mission state. "
+            "Maps Jules running/queued ↔ Zenith mission_running; Jules completed → Zenith decide_attention with PR; "
+            "Jules failed → Zenith decide_attention with action=patch for debt mitigation. "
+            "Tracks mating contracts at opposite timeline ends for intercourse support."
+        ),
+    )
+    async def jules_bijective_sync(
+        project_id: Annotated[str, Field(description="Project id.")],
+        remote_id: Annotated[str, Field(description="Jules remote session/task ID.")],
+    ) -> dict[str, Any]:
+        try:
+            cwd = str(controller.store.workspace_dir(project_id))
+            from .jules_acp_bridge import _poll_jules_rest
+            state = await _poll_jules_rest(remote_id, cwd)
+            
+            # Map Jules state to Zenith state
+            zenith_state = "mission_running" if state.normalized_status in ("running", "queued", "pending", "active") else \
+                          "decide_attention" if state.succeeded else \
+                          "decide_attention"  # failed also routes to attention
+            
+            return {
+                "remote_id": remote_id,
+                "jules_status": state.status,
+                "jules_normalized": state.normalized_status,
+                "pr_url": state.pr_url,
+                "succeeded": state.succeeded,
+                "zenith_mapped_state": zenith_state,
+                "debt_mitigation_route": "patch" if not state.succeeded else "pr_merge",
+                "mating_contracts": state.pr_url is not None,
+            }
+        except Exception as exc:
+            return {"error": "jules_bijective_sync_failed", "message": str(exc)}
 
 # ---------------------------------------------------------------------------
 # Worker tool
@@ -461,7 +528,13 @@ def main() -> None:
     if args.transport == "stdio":
         server.run(transport="stdio")
     else:
-        server.run(transport=args.transport, host=args.host, port=args.port)
+        server.run(
+            transport=args.transport,
+            host=args.host,
+            port=args.port,
+            stateless_http=True,
+            uvicorn_config={"timeout_graceful_shutdown": 5},
+        )
 
 
 __all__ = [

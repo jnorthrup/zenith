@@ -8,11 +8,12 @@ import re
 import sys
 import time
 import uuid
+import urllib.parse
+from urllib import request as urllib_request
+from urllib import error as urllib_error
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib import error as urllib_error
-from urllib import request as urllib_request
 
 from .storage import atomic_write_json
 
