@@ -10,6 +10,7 @@ import pytest
 
 from zenith_harness.config import HarnessConfig
 from zenith_harness.controller import ProjectController, ToolError
+from zenith_harness.coordinator import MissionCoordinator
 from zenith_harness.dispatcher import (
     DispatchRequest,
     MockDispatcher,
@@ -200,6 +201,65 @@ class TestNodeFailedFlow:
         items = controller.store.load_attention(pid)
         assert items[0].kind == "node_failed"
         assert "blocked" in items[0].report
+
+    def test_cannot_proceed_gets_priority_respawn(
+        self, config: HarnessConfig, workspace: Path
+    ) -> None:
+        spawn_order: list[str] = []
+
+        controller = ProjectController(
+            config,
+            MockDispatcher(
+                lambda req: (
+                    spawn_order.append(req.task.id)
+                    or WorkHandoff(node_id=req.task.id, done=True, report="ok")
+                )
+            ),
+            MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
+        )
+        pid = _seed_project(controller, workspace)
+        contract_dir = controller.store.ensure_contract_dir(pid, "mission-001")
+        (contract_dir / "VAL-002.md").write_text("# VAL-002\n\nStatement body.\n")
+        controller.submit_plan(
+            pid,
+            TaskList(
+                tasks=[
+                    _task("plain", "work", ["VAL-001"]),
+                    _task("stuck", "work", ["VAL-002"]),
+                ]
+            ),
+        )
+
+        coordinator = MissionCoordinator(
+            controller.store,
+            pid,
+            controller.dispatcher,
+            controller.terminal_reviewer,
+        )
+        handoff = WorkHandoff(
+            node_id="stuck",
+            done=False,
+            report="cannot_proceed: waiting for retry",
+        )
+        tl = controller.store.load_task_list(pid, "mission-001")
+        stuck = next(task for task in tl.tasks if task.id == "stuck")
+        coordinator._apply_handoff_collect("mission-001", stuck, handoff, "attempt-001")
+
+        task_state = controller.store.load_task_state(pid, "mission-001")
+        task_state.set_status("stuck", "pending")
+        controller.store.save_task_state(pid, "mission-001", task_state)
+
+        refreshed = controller.store.load_task_state(pid, "mission-001")
+        next_task = coordinator._next_runnable_task(tl, refreshed)
+
+        assert next_task is not None
+        assert next_task.id == "stuck"
+
+        controller.advance_project(pid, max_steps=1)
+        post_dispatch = controller.store.load_task_state(pid, "mission-001")
+
+        assert spawn_order == ["stuck"]
+        assert post_dispatch.priority_respawn_of("stuck") is False
 
 
 class TestRequestAttentionRaisesNodeAttention:

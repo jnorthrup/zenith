@@ -107,6 +107,7 @@ def _augment_acp_command(command: str, provider) -> str:
             + ' -c model_reasoning_effort="xhigh"'
         )
     # hermes: no-op
+    # jules: no-op
     return command
 
 
