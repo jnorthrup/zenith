@@ -39,6 +39,22 @@ MCP_ENV_FORWARD_ALLOWLIST = (
     "MAX_THINKING_TOKENS",
     "ZAI_API_KEY",
     "ZAI_BASE_URL",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENAI_MODEL",
+    "GEMINI_API_KEY",
+    "GEMINI_BASE_URL",
+    "GEMINI_MODEL",
+    "DEEPSEEK_API_KEY",
+    "DEEPSEEK_BASE_URL",
+    "DEEPSEEK_MODEL",
+    "GROQ_API_KEY",
+    "GROQ_BASE_URL",
+    "TOGETHER_API_KEY",
+    "TOGETHER_BASE_URL",
+    "MISTRAL_API_KEY",
+    "MISTRAL_BASE_URL",
+    "LLAMA_API_KEY",
 )
 
 BUILD_SHA_MARKER = ".zenith-build-sha"
@@ -545,9 +561,16 @@ def _write_bootstrap_config(
 
 def _replace_managed_block(path: Path, start: str, end: str, block: str) -> None:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    if start in existing and end in existing:
-        before, _, tail = existing.partition(start)
-        _, _, after = tail.partition(end)
+    if start in existing or end in existing:
+        if start in existing and end in existing:
+            before, _, tail = existing.partition(start)
+            _, _, after = tail.partition(end)
+        elif start in existing:
+            before, _, _ = existing.partition(start)
+            after = ""
+        else:
+            _, _, after = existing.partition(end)
+            before = ""
         updated = before.rstrip()
         if updated:
             updated += "\n\n"

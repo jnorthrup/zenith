@@ -92,16 +92,39 @@ def workspace_fingerprint(workspace: str | Path) -> str:
     # Newest source file mtime (covers non-git dirs and uncommitted changes)
     try:
         newest = 0.0
-        for pattern in ("**/*.py", "**/*.kt", "**/*.kts", "**/*.ts", "**/*.js"):
-            for f in ws.glob(pattern):
-                if ".git" in f.parts or "build" in f.parts or ".gradle" in f.parts:
-                    continue
-                try:
-                    mtime = f.stat().st_mtime
-                    if mtime > newest:
-                        newest = mtime
-                except OSError:
-                    continue
+        file_count = 0
+        max_files = 1000
+        excluded_dirs = {
+            ".git", "build", ".gradle", ".venv", "venv", "node_modules",
+            "__pycache__", ".pytest_cache", ".mypy_cache", "dist", "out"
+        }
+        allowed_extensions = {".py", ".kt", ".kts", ".ts", ".js"}
+        
+        def _walk(path: Path) -> None:
+            nonlocal newest, file_count
+            if file_count >= max_files:
+                return
+            try:
+                for entry in os.scandir(path):
+                    if entry.is_dir():
+                        if entry.name not in excluded_dirs:
+                            _walk(Path(entry.path))
+                    elif entry.is_file():
+                        ext = Path(entry.name).suffix.lower()
+                        if ext in allowed_extensions:
+                            file_count += 1
+                            if file_count >= max_files:
+                                return
+                            try:
+                                mtime = entry.stat().st_mtime
+                                if mtime > newest:
+                                    newest = mtime
+                            except OSError:
+                                pass
+            except OSError:
+                pass
+
+        _walk(ws)
         if newest > 0:
             h.update(b"MTIME:")
             h.update(str(int(newest)).encode())
@@ -673,22 +696,16 @@ class ProjectStore:
             # Enforce age threshold on the remaining records
             for rec in records[:max_per_node]:
                 try:
-                    rec_dt = datetime.fromisoformat(
-                        rec.spawn_ts.replace("Z", "+00:00").replace("-", ":", 2)
-                    )
-                    # spawn_ts is filesafe (colons→hyphens); fix the time portion
                     parts = rec.spawn_ts.split("T")
                     if len(parts) == 2:
-                        time_part = parts[1].replace("-", ":")
-                        rec_dt = datetime.fromisoformat(
-                            f"{parts[0]}T{time_part}+00:00"
-                        )
-                    age = now - rec_dt
-                    if age > timedelta(days=max_age_days):
-                        if self.tombstone_attempt(
-                            project_id, mission_id, rec.spawn_ts, rec.node_id
-                        ):
-                            tombstone_count += 1
+                        time_part = parts[1].replace("Z", "+00:00").replace("-", ":")
+                        rec_dt = datetime.fromisoformat(f"{parts[0]}T{time_part}")
+                        age = now - rec_dt
+                        if age > timedelta(days=max_age_days):
+                            if self.tombstone_attempt(
+                                project_id, mission_id, rec.spawn_ts, rec.node_id
+                            ):
+                                tombstone_count += 1
                 except (ValueError, TypeError):
                     continue
 
