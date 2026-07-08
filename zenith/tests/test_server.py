@@ -67,6 +67,8 @@ async def test_orchestrator_tools_registered(config: HarnessConfig) -> None:
         "decide_attention",
         "inspect_project",
         "abort_project",
+        "jules_converse",
+        "jules_bijective_sync",
     }
 
 
@@ -308,3 +310,113 @@ def test_run_coro_blocking_works_inside_running_loop() -> None:
         return _run_coro_blocking(_inner())
 
     assert asyncio.run(_outer()) == 42
+
+
+@pytest.mark.asyncio
+async def test_jules_bijective_sync_mapping(config: HarnessConfig, workspace: Path) -> None:
+    from unittest.mock import patch
+    from zenith_harness.jules_acp_bridge import JulesRemoteState
+    from zenith_harness.storage import ProjectStore
+
+    def responder(req: DispatchRequest) -> WorkHandoff:
+        return WorkHandoff(node_id="w1", done=True, report="ok")
+
+    controller = ProjectController(
+        config,
+        MockDispatcher(responder),
+        MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
+    )
+    server = create_orchestrator_server(config, controller)
+    await server.call_tool(
+        "start_project",
+        {"brief": "Ship it.", "workspace_dir": str(workspace)},
+    )
+    pid = ProjectStore(config).list_projects()[0].id
+
+    # Test case 1: Jules running
+    async def mock_poll_running(remote_id, cwd):
+        return JulesRemoteState(remote_id=remote_id, status="running", raw="{}", pr_url=None)
+
+    with patch("zenith_harness.jules_acp_bridge._poll_jules_rest", side_effect=mock_poll_running):
+        res_list = await server.call_tool(
+            "jules_bijective_sync",
+            {"project_id": pid, "remote_id": "sess-123"},
+        )
+        res = res_list.structured_content
+        assert res["zenith_mapped_state"] == "mission_running"
+        assert res["debt_mitigation_route"] == "patch"
+        assert res["mating_contracts"] is False
+
+    # Test case 2: Jules succeeded
+    async def mock_poll_succeeded(remote_id, cwd):
+        return JulesRemoteState(remote_id=remote_id, status="completed", raw="{}", pr_url="https://github.com/pull/1")
+
+    with patch("zenith_harness.jules_acp_bridge._poll_jules_rest", side_effect=mock_poll_succeeded):
+        res_list = await server.call_tool(
+            "jules_bijective_sync",
+            {"project_id": pid, "remote_id": "sess-123"},
+        )
+        res = res_list.structured_content
+        assert res["zenith_mapped_state"] == "decide_attention"
+        assert res["debt_mitigation_route"] == "pr_merge"
+        assert res["mating_contracts"] is True
+        assert res["pr_url"] == "https://github.com/pull/1"
+
+    # Test case 3: Jules failed
+    async def mock_poll_failed(remote_id, cwd):
+        return JulesRemoteState(remote_id=remote_id, status="failed", raw="{}", pr_url=None)
+
+    with patch("zenith_harness.jules_acp_bridge._poll_jules_rest", side_effect=mock_poll_failed):
+        res_list = await server.call_tool(
+            "jules_bijective_sync",
+            {"project_id": pid, "remote_id": "sess-123"},
+        )
+        res = res_list.structured_content
+        assert res["zenith_mapped_state"] == "decide_attention"
+        assert res["debt_mitigation_route"] == "patch"
+        assert res["succeeded"] is False
+
+
+@pytest.mark.asyncio
+async def test_jules_converse_tool(config: HarnessConfig, workspace: Path) -> None:
+    from unittest.mock import patch
+    from zenith_harness.jules_acp_bridge import JulesRemoteState
+    from zenith_harness.storage import ProjectStore
+
+    def responder(req: DispatchRequest) -> WorkHandoff:
+        return WorkHandoff(node_id="w1", done=True, report="ok")
+
+    controller = ProjectController(
+        config,
+        MockDispatcher(responder),
+        MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
+    )
+    server = create_orchestrator_server(config, controller)
+    await server.call_tool(
+        "start_project",
+        {"brief": "Ship it.", "workspace_dir": str(workspace)},
+    )
+    pid = ProjectStore(config).list_projects()[0].id
+
+    converse_called = False
+    async def mock_send_message(remote_id, message, cwd):
+        nonlocal converse_called
+        assert remote_id == "sess-123"
+        assert message == "hello"
+        converse_called = True
+
+    async def mock_poll(remote_id, cwd):
+        return JulesRemoteState(remote_id=remote_id, status="completed", raw="{}", pr_url="https://github.com/pull/2")
+
+    with patch("zenith_harness.jules_acp_bridge._send_jules_message", side_effect=mock_send_message), \
+         patch("zenith_harness.jules_acp_bridge._poll_jules_rest", side_effect=mock_poll):
+        res_list = await server.call_tool(
+            "jules_converse",
+            {"project_id": pid, "remote_id": "sess-123", "message": "hello"},
+        )
+        res = res_list.structured_content
+        assert converse_called is True
+        assert res["remote_id"] == "sess-123"
+        assert res["status"] == "completed"
+        assert res["pr_url"] == "https://github.com/pull/2"
+        assert res["succeeded"] is True

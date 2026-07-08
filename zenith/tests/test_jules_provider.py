@@ -64,3 +64,26 @@ def test_bridge_retries_transient_cli_error() -> None:
     assert "https://github.com/example/repo/pull/99" in (state.pr_url or ""), f"expected PR URL, got {state.pr_url!r}"
     assert call_count == 3, f"expected 3 status calls (2 transient + 1 success), got {call_count}"
 
+
+def test_acp_subprocess_env_jules_oauth_resolution(monkeypatch) -> None:
+    from unittest.mock import patch
+    import subprocess
+    from zenith_harness.jules_acp_bridge import _token_manager
+
+    # Clear JULES_API_KEY from environment to verify fallback to gcloud
+    monkeypatch.delenv("JULES_API_KEY", raising=False)
+    
+    # Reset cached token to force dynamic resolution
+    _token_manager._token = None
+
+    mock_run_res = subprocess.CompletedProcess(
+        args=["gcloud", "auth", "print-access-token"],
+        returncode=0,
+        stdout="ya29.mock-resolved-oauth-token\n",
+        stderr=""
+    )
+
+    with patch("subprocess.run", return_value=mock_run_res):
+        env = _acp_subprocess_env(get_provider("jules"))
+        assert env.get("JULES_API_KEY") == "ya29.mock-resolved-oauth-token"
+

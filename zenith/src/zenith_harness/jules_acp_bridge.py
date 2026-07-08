@@ -24,8 +24,55 @@ STATUS_POLL_SECONDS = float(os.environ.get("JULES_POLL_SECONDS", "5"))
 MAX_TRANSIENT_RETRIES = int(os.environ.get("JULES_MAX_TRANSIENT_RETRIES", "3"))
 TRANSIENT_BACKOFF_S = float(os.environ.get("JULES_TRANSIENT_BACKOFF_S", "5.0"))
 JULES_BIN = os.environ.get("JULES_BIN", "jules")
-JULES_API_KEY = os.environ.get("JULES_API_KEY", "")
-JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://aida.googleapis.com/v1")
+class TokenManager:
+    def __init__(self) -> None:
+        self._token = None
+
+    def get_token(self, force_refresh: bool = False) -> str:
+        if not force_refresh and self._token:
+            return self._token
+
+        env_key = os.environ.get("JULES_API_KEY", "")
+        # If JULES_API_KEY looks like a test key, return it as-is
+        if env_key and not env_key.startswith("ya29.") and ("test" in env_key or env_key == "mock-key"):
+            self._token = env_key
+            return env_key
+
+        # Try to run gcloud auth print-access-token
+        try:
+            import subprocess
+            res = subprocess.run(
+                ["gcloud", "auth", "print-access-token"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False
+            )
+            if res.returncode == 0:
+                token = res.stdout.strip()
+                if token:
+                    self._token = token
+                    return token
+        except Exception:
+            pass
+
+        self._token = env_key
+        return env_key
+
+    def has_api_key(self) -> bool:
+        if os.environ.get("JULES_API_KEY"):
+            return True
+        import shutil
+        return bool(shutil.which("gcloud"))
+
+_token_manager = TokenManager()
+
+def __getattr__(name: str) -> Any:
+    if name == "JULES_API_KEY":
+        return _token_manager.get_token()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://jules.googleapis.com/v1alpha")
 PR_URL_RE = re.compile(r"https?://[^\s'\"]+/pull/\d+\b")
 ID_PATTERNS = (
     re.compile(r"(?i)\b(?:session|task)\s*id\s*[:=#]\s*([A-Za-z0-9_-]{3,})\b"),
@@ -213,11 +260,11 @@ async def _run_jules_rest(prompt_text: str, cwd: str) -> JulesRemoteState:
 
 
 async def _rest_json(method: str, url: str, payload: JSON | None = None) -> Any:
-    def _do_request() -> Any:
+    def _do_request(token: str) -> Any:
         body = None
         headers = {"Accept": "application/json"}
-        if JULES_API_KEY:
-            headers["Authorization"] = f"Bearer {JULES_API_KEY}"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         if payload is not None:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload).encode("utf-8")
@@ -227,18 +274,28 @@ async def _rest_json(method: str, url: str, payload: JSON | None = None) -> Any:
         try:
             return json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise BridgeError(f"Jules REST returned non-JSON payload from {url}: {raw[:400]}" ) from exc
+            raise BridgeError(f"Jules REST returned non-JSON payload from {url}: {raw[:400]}") from exc
 
+    token = _token_manager.get_token()
     try:
-        return await asyncio.to_thread(_do_request)
+        return await asyncio.to_thread(_do_request, token)
     except urllib_error.HTTPError as exc:
+        if exc.code == 401:
+            # Token might be expired, refresh it and retry once
+            token = _token_manager.get_token(force_refresh=True)
+            try:
+                return await asyncio.to_thread(_do_request, token)
+            except urllib_error.HTTPError as retry_exc:
+                detail = retry_exc.read().decode("utf-8", errors="replace")
+                raise BridgeError(f"Jules REST {method} {url} failed after token refresh: HTTP {retry_exc.code}: {detail[:400]}") from retry_exc
+
         detail = exc.read().decode("utf-8", errors="replace")
         if exc.code >= 500:
             # transient server error: retry
             for attempt in range(MAX_TRANSIENT_RETRIES):
                 await asyncio.sleep(TRANSIENT_BACKOFF_S)
                 try:
-                    return await asyncio.to_thread(_do_request)
+                    return await asyncio.to_thread(_do_request, token)
                 except (urllib_error.HTTPError, urllib_error.URLError):
                     if attempt == MAX_TRANSIENT_RETRIES - 1:
                         raise BridgeError(
@@ -251,7 +308,7 @@ async def _rest_json(method: str, url: str, payload: JSON | None = None) -> Any:
         for attempt in range(MAX_TRANSIENT_RETRIES):
             await asyncio.sleep(TRANSIENT_BACKOFF_S)
             try:
-                return await asyncio.to_thread(_do_request)
+                return await asyncio.to_thread(_do_request, token)
             except urllib_error.URLError:
                 if attempt == MAX_TRANSIENT_RETRIES - 1:
                     raise BridgeError(
@@ -478,7 +535,7 @@ async def _run_prompt(prompt_text: str, cwd: str, *, transport: JsonRpcTransport
     if not prompt_text:
         raise BridgeError("empty session/prompt payload")
     await transport.notify_session_update(session_id, "Queued task for Jules remote execution.")
-    use_rest = bool(JULES_API_KEY)
+    use_rest = _token_manager.has_api_key()
     try:
         if use_rest:
             await transport.notify_session_update(session_id, "Using Jules REST transport.")

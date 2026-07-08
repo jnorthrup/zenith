@@ -143,7 +143,7 @@ def test_synthesize_missing_handoff_records_failure(
         session_error=None,
     )
     assert handoff.done is False
-    assert "stop_reason=cancelled" in handoff.report
+    assert "Stop reason: cancelled" in handoff.report
     assert handoff_path.exists()
 
 

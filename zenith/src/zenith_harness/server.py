@@ -12,7 +12,7 @@ import os
 from typing import Annotated, Any
 
 from fastmcp import Context, FastMCP
-from pydantic import Field
+from pydantic import Field, ValidationError as PydanticValidationError
 
 from .config import HarnessConfig
 from .controller import ProjectController, ToolError
@@ -246,6 +246,111 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
                 )
             except ToolError as exc:
                 return _to_payload(exc)
+            except PydanticValidationError as exc:
+                # FastMCP boundary: convert Pydantic error to ToolError with repair prescriptions.
+                # Maps Pydantic error locations to actionable fix codes.
+                repair_codes = _pydantic_validation_repair_codes(exc)
+                return {
+                    "error": "decide_attention_validation_failed",
+                    "message": str(exc),
+                    "details": repair_codes,
+                }
+
+    @staticmethod
+    def _pydantic_validation_repair_codes(exc: PydanticValidationError) -> list[str]:
+        """Map Pydantic error locations to fix prescriptions.
+
+        Each returned string is an actionable code + instruction that tells the
+        caller exactly what to fix in the Decision dict they submitted.
+        """
+        codes = []
+        for err in exc.errors():
+            loc = ".".join(str(l) for l in err["loc"])
+            msg = err["msg"]
+            inp = err.get("input", "")
+            code = err.get("code", "unknown")
+
+            # Gate body must be empty string
+            if "body" in loc and "gate" in loc and msg.startswith("String should have at most"):
+                codes.append(
+                    f"fix: set gate body to empty string '' (gates cannot have body content)"
+                )
+                continue
+
+            # Gate skill must be None
+            if "skill" in loc and "gate" in loc and "required" in msg.lower():
+                codes.append(
+                    f"fix: set skill=null for gates (gates cannot have a skill)"
+                )
+                continue
+
+            # Work/validate tasks need non-empty body
+            if "body" in loc and msg.startswith("String should have at least"):
+                task_type = "work" if "work" in loc else "validate"
+                codes.append(
+                    f"fix: {task_type} task needs non-empty body string "
+                    f"(min length 1, found '{inp}' for field '{loc}')"
+                )
+                continue
+
+            # Work/validate tasks need skill
+            if "skill" in loc and ("required" in msg.lower() or msg.startswith("Field required")):
+                task_type = "work" if "work" in loc else "validate"
+                codes.append(
+                    f"fix: {task_type} task needs a skill field "
+                    f"(e.g. skill='engineering-mission-playbook', found '{inp}' for '{loc}')"
+                )
+                continue
+
+            # decisions list item — Decision object validation
+            if loc.startswith("decisions"):
+                # Try to give item-level guidance
+                item_idx = None
+                for i, l in enumerate(err["loc"]):
+                    if isinstance(l, int) and l >= 0:
+                        item_idx = l
+                        break
+                if item_idx is not None:
+                    if "item_id" in loc:
+                        codes.append(
+                            f"fix[decision[{item_idx}]]: item_id is required "
+                            f"(found '{inp}' at '{loc}')"
+                        )
+                    elif "action" in loc:
+                        codes.append(
+                            f"fix[decision[{item_idx}]]: action must be one of: "
+                            f"continue | patch | retry | next_mission | abort "
+                            f"(found '{inp}' at '{loc}')"
+                        )
+                    elif "patch" in loc:
+                        if msg.startswith("Field required"):
+                            codes.append(
+                                f"fix[decision[{item_idx}]]: patch is required when action=patch "
+                                f"(omit patch field when action=continue/retry/next_mission/abort)"
+                            )
+                        else:
+                            codes.append(
+                                f"fix[decision[{item_idx}].patch]: {msg} "
+                                f"(input={inp}, loc={loc})"
+                            )
+                    elif "justification" in loc:
+                        codes.append(
+                            f"fix[decision[{item_idx}].justification]: {msg} "
+                            f"(found '{inp}', set to non-empty string)"
+                        )
+                    else:
+                        codes.append(
+                            f"fix[decision[{item_idx}].{loc.replace('decisions.','')}]: "
+                            f"{msg} (input={inp})"
+                        )
+                else:
+                    codes.append(f"fix: {msg} at '{loc}' (input={inp}, code={code})")
+                continue
+
+            # Fallback
+            codes.append(f"fix: {msg} at '{loc}' (input={inp}, code={code})")
+
+        return codes if codes else [f"fix: Pydantic validation failed: {exc}"]
 
     @mcp.tool(
         name="inspect_project",

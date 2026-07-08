@@ -132,6 +132,14 @@ def _acp_subprocess_env(provider) -> dict[str, str]:
         # Env-var hints — harmless if codex ignores them.
         env["CODEX_SANDBOX"] = "danger-full-access"
         env["CODEX_DISABLE_SANDBOX"] = "1"
+    elif name == "jules":
+        try:
+            from .jules_acp_bridge import _token_manager
+            token = _token_manager.get_token()
+            if token:
+                env["JULES_API_KEY"] = token
+        except Exception:
+            pass
     # hermes: no special env needed
     return env
 
@@ -844,6 +852,7 @@ class ACPNodeRunner:
         # Persist to disk for forensic trail
         try:
             import json
+            handoff_path.parent.mkdir(parents=True, exist_ok=True)
             handoff_path.write_text(
                 json.dumps(handoff.model_dump(mode="json"), indent=2),
                 encoding="utf-8",
