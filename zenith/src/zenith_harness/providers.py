@@ -20,6 +20,17 @@ class ProviderDefinition:
     acp_supports_system_prompt: bool = True
     acp_runtime_mode: str | None = None
 
+    def effort_flags(self, effort: str | None) -> str:
+        """Return provider-specific CLI flags for reasoning effort.
+
+        Returns empty string if the provider does not support it or is ambivalent.
+        """
+        if not effort:
+            return ""
+        if self.name == "codex":
+            return f' -c model_reasoning_effort="{effort}"'
+        return ""
+
 
 @dataclass(frozen=True)
 class ProviderSelection:

@@ -97,25 +97,39 @@ class ACPError(Exception):
     pass
 
 
-def _augment_acp_command(command: str, provider) -> str:
+def _augment_acp_command(
+    command: str, provider, reasoning_effort: str | None = None
+) -> str:
     """Append provider-specific config flags to the ACP launch command.
 
     For codex-acp this is the no-ask, no-sandbox combo — equivalent to
     `codex --dangerously-bypass-approvals-and-sandbox`, which codex-acp
     does not expose as a flag but accepts via `-c` overrides.
 
-    For hermes the command is passed through unchanged.
+    `reasoning_effort` is the per-role override; None keeps the
+    historical provider default.
     """
     name = getattr(provider, "name", None)
     if name == "codex":
+        # Keep backward compatibility: default to "xhigh" for codex if unset
+        effort = reasoning_effort or "xhigh"
+        effort_flag = ""
+        if hasattr(provider, "effort_flags"):
+            effort_flag = provider.effort_flags(effort)
+        else:
+            effort_flag = f' -c model_reasoning_effort="{effort}"'
+
         return (
             command
             + ' -c sandbox_mode="danger-full-access"'
             + ' -c approval_policy="never"'
-            + ' -c model_reasoning_effort="xhigh"'
+            + effort_flag
         )
-    # hermes: no-op
-    # jules: no-op
+
+    # For other providers, use their custom effort flags if available
+    if hasattr(provider, "effort_flags") and reasoning_effort:
+        return command + provider.effort_flags(reasoning_effort)
+
     return command
 
 
