@@ -3,21 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-ProviderName = Literal["claude", "codex", "hermes", "jules"]
+ProviderName = str
 ConfigFormat = Literal["mcp_json", "codex_config"]
 
-ORCHESTRATOR_PROVIDER_NAMES: tuple[ProviderName, ...] = (
-    "claude",
-    "codex",
-    "hermes",
-    "jules",
-)
-WORKER_PROVIDER_NAMES: tuple[ProviderName, ...] = (
-    "claude",
-    "codex",
-    "hermes",
-    "jules",
-)
 
 
 @dataclass(frozen=True)
@@ -165,6 +153,10 @@ PROVIDERS: dict[ProviderName, ProviderDefinition] = {
         acp_runtime_mode=None,
     ),
 }
+
+ORCHESTRATOR_PROVIDER_NAMES: tuple[str, ...] = tuple(PROVIDERS.keys())
+WORKER_PROVIDER_NAMES: tuple[str, ...] = tuple(PROVIDERS.keys())
+
 
 
 def get_provider(name: str) -> ProviderDefinition:
