@@ -50,6 +50,7 @@ class HarnessConfig:
     terminal_reviewer_provider_name: str | None
     terminal_reviewer_acp_command: str | None
     max_parallel_nodes: int = DEFAULT_MAX_PARALLEL_NODES
+    local: bool = False
 
     @classmethod
     def discover(cls) -> HarnessConfig:
@@ -82,6 +83,7 @@ class HarnessConfig:
         terminal_reviewer_acp_command = os.environ.get(
             "ZENITH_TERMINAL_REVIEWER_ACP_COMMAND"
         )
+        local = os.environ.get("ZENITH_LOCAL") == "true"
         return cls(
             bundled_dir=_bundled_dir(),
             harness_home=harness_home,
@@ -96,6 +98,7 @@ class HarnessConfig:
             max_parallel_nodes=_resolve_max_parallel(
                 os.environ.get("ZENITH_MAX_PARALLEL_NODES")
             ),
+            local=local,
         )
 
     # ------------------------------------------------------------------
@@ -163,14 +166,20 @@ class HarnessConfig:
 
     def bucket_root(self, project_id: str) -> Path:
         """Per-project root: parent of .zenith/ and .zenith-runtime/."""
+        if self.local:
+            return Path.cwd()
         return self.projects_dir / project_id
 
     def zenith_dir(self, project_id: str) -> Path:
         """Durable, all-roles-readable record (brief, decisions, skills, missions)."""
+        if self.local:
+            return Path.cwd() / ".zenith"
         return self.bucket_root(project_id) / ".zenith"
 
     def zenith_runtime_dir(self, project_id: str) -> Path:
         """Orchestrator-only cursors (project.json, state.json, dag.json, ...)."""
+        if self.local:
+            return Path.cwd() / ".zenith-runtime"
         return self.bucket_root(project_id) / ".zenith-runtime"
 
     def skill_dirs(self, project_id: str | None = None) -> list[Path]:

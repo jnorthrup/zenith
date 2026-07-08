@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from zenith_harness.acp_runner import (
+    ACPClient,
     ACPNodeRunner,
     _acp_subprocess_env,
     _augment_acp_command,
@@ -197,3 +198,32 @@ def test_terminal_review_path_naming(config: HarnessConfig, project_setup):
     assert "terminal-reviews" in p.parts
     # JSON handoff lives in the runtime cursor tree, not the durable .zenith record.
     assert ".zenith-runtime" in p.parts
+
+
+def test_handle_fs_read_whitespace_squeezing(tmp_path: Path):
+    client = ACPClient(
+        process=None,  # type: ignore[arg-type]
+        working_dir=str(tmp_path),
+    )
+    
+    # 1. Non-indentation grammar (e.g. Markdown)
+    md_file = tmp_path / "test.md"
+    md_file.write_text("Hello   world!\n\n\nNice    to meet you.", encoding="utf-8")
+    
+    res = client._handle_fs_read({"path": str(md_file)})
+    assert res["content"] == "Hello world!\nNice to meet you."
+
+    # 2. Indentation grammar (e.g. Python)
+    py_file = tmp_path / "test.py"
+    py_file.write_text("def foo():\n    #  comment\n\n\n    pass", encoding="utf-8")
+    
+    res = client._handle_fs_read({"path": str(py_file)})
+    assert res["content"] == "def foo():\n    #  comment\n\n\n    pass"
+
+    # 3. Indentation grammar (e.g. YAML)
+    yaml_file = tmp_path / "test.yaml"
+    yaml_file.write_text("key:\n  - value1\n\n\n  - value2", encoding="utf-8")
+    
+    res = client._handle_fs_read({"path": str(yaml_file)})
+    assert res["content"] == "key:\n  - value1\n\n\n  - value2"
+

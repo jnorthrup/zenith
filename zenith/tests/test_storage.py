@@ -418,3 +418,35 @@ class TestSeal:
         text = path.read_text()
         assert "status: done" in text and "Everything shipped." in text
         assert path == store.mission_dir("p1", "mission-001") / "closeout.md"
+
+
+class TestLocalProjectLifecycle:
+    def test_create_local_project_layout(
+        self, config: HarnessConfig, workspace: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Create a config with local=True
+        from dataclasses import replace
+        local_config = replace(config, local=True)
+        local_store = ProjectStore(local_config)
+
+        # Mock Path.cwd() to return workspace directory, as ProjectStore uses Path.cwd() for local path search
+        monkeypatch.setattr(Path, "cwd", lambda: workspace)
+
+        record = local_store.create_project("Build local thing.", workspace, project_id="p-local")
+        assert record.id == "p-local"
+
+        # Verify that project directories are directly inside workspace
+        assert (workspace / ".zenith").is_dir()
+        assert (workspace / ".zenith-runtime").is_dir()
+        assert (workspace / ".zenith" / "brief.md").exists()
+        assert (workspace / ".zenith-runtime" / "project.json").exists()
+
+        # Load project
+        loaded = local_store.load_project("p-local")
+        assert loaded.id == "p-local"
+        assert Path(loaded.workspace_dir) == workspace
+
+        # List projects
+        projects = local_store.list_projects()
+        assert any(p.id == "p-local" for p in projects)
+

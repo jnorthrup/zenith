@@ -195,12 +195,37 @@ class ProjectStore:
     # ------------------------------------------------------------------
 
     def bucket_root(self, project_id: str) -> Path:
+        local_runtime_json = Path.cwd() / ".zenith-runtime" / "project.json"
+        if local_runtime_json.exists():
+            try:
+                data = json.loads(local_runtime_json.read_text(encoding="utf-8"))
+                if data.get("id") == project_id:
+                    return Path.cwd()
+            except Exception:
+                pass
         return self.config.bucket_root(project_id)
 
     def zenith_dir(self, project_id: str) -> Path:
+        local_path = Path.cwd() / ".zenith"
+        local_runtime_json = Path.cwd() / ".zenith-runtime" / "project.json"
+        if local_runtime_json.exists():
+            try:
+                data = json.loads(local_runtime_json.read_text(encoding="utf-8"))
+                if data.get("id") == project_id:
+                    return local_path
+            except Exception:
+                pass
         return self.config.zenith_dir(project_id)
 
     def zenith_runtime_dir(self, project_id: str) -> Path:
+        local_runtime = Path.cwd() / ".zenith-runtime"
+        if (local_runtime / "project.json").exists():
+            try:
+                data = json.loads((local_runtime / "project.json").read_text(encoding="utf-8"))
+                if data.get("id") == project_id:
+                    return local_runtime
+            except Exception:
+                pass
         return self.config.zenith_runtime_dir(project_id)
 
     def workspace_dir(self, project_id: str) -> Path:
@@ -236,8 +261,12 @@ class ProjectStore:
             raise FileNotFoundError(f"workspace_dir does not exist: {ws}")
         pid = project_id or self.generate_project_id(brief)
 
-        zenith = self.zenith_dir(pid)
-        runtime = self.zenith_runtime_dir(pid)
+        if self.config.local:
+            zenith = ws / ".zenith"
+            runtime = ws / ".zenith-runtime"
+        else:
+            zenith = self.config.projects_dir / pid / ".zenith"
+            runtime = self.config.projects_dir / pid / ".zenith-runtime"
 
         # 1) Durable layout (.zenith/)
         zenith.mkdir(parents=True, exist_ok=True)
@@ -291,7 +320,15 @@ class ProjectStore:
         return record
 
     def load_project(self, project_id: str) -> ProjectRecord:
-        path = self.zenith_runtime_dir(project_id) / "project.json"
+        local_runtime_json = Path.cwd() / ".zenith-runtime" / "project.json"
+        if local_runtime_json.exists():
+            try:
+                rec = ProjectRecord.model_validate_json(local_runtime_json.read_text(encoding="utf-8"))
+                if rec.id == project_id:
+                    return rec
+            except Exception:
+                pass
+        path = self.config.projects_dir / project_id / ".zenith-runtime" / "project.json"
         if not path.exists():
             raise FileNotFoundError(f"project not found: {project_id}")
         return ProjectRecord.model_validate_json(path.read_text(encoding="utf-8"))
@@ -318,21 +355,35 @@ class ProjectStore:
         self._ensure_symlink_shims(ws, zenith)
 
     def list_projects(self) -> list[ProjectRecord]:
-        if not self.config.projects_dir.exists():
-            return []
+        seen_ids: set[str] = set()
         result: list[ProjectRecord] = []
-        for entry in sorted(self.config.projects_dir.iterdir()):
-            project_json = entry / ".zenith-runtime" / "project.json"
-            if not project_json.exists():
-                continue
+        
+        # 1) Check local workspace directory
+        local_runtime_json = Path.cwd() / ".zenith-runtime" / "project.json"
+        if local_runtime_json.exists():
             try:
-                result.append(
-                    ProjectRecord.model_validate_json(
+                rec = ProjectRecord.model_validate_json(local_runtime_json.read_text(encoding="utf-8"))
+                result.append(rec)
+                seen_ids.add(rec.id)
+            except Exception:
+                pass
+
+        # 2) Check homedir projects directory
+        if self.config.projects_dir.exists():
+            for entry in sorted(self.config.projects_dir.iterdir()):
+                project_json = entry / ".zenith-runtime" / "project.json"
+                if not project_json.exists():
+                    continue
+                try:
+                    rec = ProjectRecord.model_validate_json(
                         project_json.read_text(encoding="utf-8")
                     )
-                )
-            except Exception:
-                continue
+                    if rec.id not in seen_ids:
+                        result.append(rec)
+                        seen_ids.add(rec.id)
+                except Exception:
+                    continue
+                    
         result.sort(key=lambda r: r.created_at, reverse=True)
         return result
 
@@ -849,6 +900,20 @@ class ProjectStore:
             host_dir.mkdir(parents=True, exist_ok=True)
             self._ensure_skills_surface(host_dir / "skills", target_skills)
         self._ensure_agents_surface(workspace / "AGENTS.md", target_agents_md)
+        
+        # Expose a convenient bin/zenith launch symlink if installed in local .venv
+        venv_zenith = workspace / ".venv" / "bin" / "zenith"
+        if venv_zenith.exists():
+            bin_dir = workspace / "bin"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            zenith_symlink = bin_dir / "zenith"
+            try:
+                if not zenith_symlink.exists():
+                    # Calculate relative path to keep symlinks portable within the workspace
+                    rel_target = os.path.relpath(venv_zenith, bin_dir)
+                    zenith_symlink.symlink_to(rel_target)
+            except OSError:
+                pass
 
     def _ensure_skills_surface(self, link: Path, target: Path) -> None:
         """Expose aggregate bucket skills without replacing real repo skill dirs."""
@@ -929,8 +994,11 @@ class ProjectStore:
                 self._copy_missing_tree(source, target)
 
     def _seed_bundled_skills(self, target: Path) -> None:
-        """Copy bundled `SKILL.md` files into the bucket if not already
-        present. Idempotent and non-overwriting per skill."""
+        """Symlink bundled `SKILL.md` files into the bucket.
+        Updates symlinks atomically if the bundled skill SHA-256 changes."""
+        import hashlib
+        import tempfile
+        
         bundled_skills = self.config.bundled_dir / "skills"
         if not bundled_skills.exists():
             return
@@ -943,10 +1011,35 @@ class ProjectStore:
                 continue
             dest_dir = target / skill_dir.name
             dest = dest_dir / "SKILL.md"
-            if dest.exists():
-                continue
             dest_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+            
+            try:
+                src_sha = hashlib.sha256(src.read_bytes()).hexdigest()
+            except OSError:
+                continue
+                
+            needs_update = True
+            if dest.exists():
+                if dest.is_symlink() and dest.resolve() == src.resolve():
+                    needs_update = False
+                elif dest.is_file() and not dest.is_symlink():
+                    try:
+                        dest_sha = hashlib.sha256(dest.read_bytes()).hexdigest()
+                        # Whether it matches or not, we replace with symlink 
+                        # to sanitize efficient zenith home vs. project instance code.
+                        needs_update = True
+                    except OSError:
+                        pass
+            
+            if needs_update:
+                try:
+                    fd, tmp_path = tempfile.mkstemp(dir=dest_dir, prefix=".tmp_")
+                    os.close(fd)
+                    os.unlink(tmp_path)
+                    os.symlink(src.resolve(), tmp_path)
+                    os.rename(tmp_path, dest)
+                except OSError:
+                    pass
 
     @staticmethod
     def _copy_missing_tree(source: Path, target: Path) -> None:
@@ -963,7 +1056,7 @@ class ProjectStore:
             elif src.is_dir():
                 dest.mkdir(parents=True, exist_ok=True)
             elif src.is_file():
-                shutil.copy2(src, dest)
+                dest.symlink_to(src.resolve())
 
 
 __all__ = [

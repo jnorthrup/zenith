@@ -148,6 +148,18 @@ def cli() -> None:
 @click.option("--terminal-reviewer-acp-command", default=None)
 @click.option("--zenith-home", type=click.Path(), default=None)
 @click.option("--workspace-dir", "workspace_dir", type=click.Path(), default=".")
+@click.option(
+    "--symlink/--no-symlink",
+    "use_symlinks",
+    default=True,
+    help="Symlink bundled artifacts back to ZENITH_HOME instead of copying (default: enabled).",
+)
+@click.option(
+    "--local/--no-local",
+    "local",
+    default=False,
+    help="Store .zenith project data in the project workspace folder instead of the homedir.",
+)
 def init(
     agent: str | None,
     orchestrator_provider: str | None,
@@ -159,6 +171,8 @@ def init(
     terminal_reviewer_acp_command: str | None,
     zenith_home: str | None,
     workspace_dir: str,
+    use_symlinks: bool,
+    local: bool,
 ) -> None:
     """Initialize host-agent surface: MCP/codex config + provider agents + orchestrator prompt.
 
@@ -192,15 +206,17 @@ def init(
         _phase_stale_zenith_artifacts(workspace, selection)
 
     # 1) MCP / Codex config
-    storage_env = _storage_env(zenith_home=zenith_home, workspace=workspace, selection=selection)
+    storage_env = _storage_env(
+        zenith_home=zenith_home, workspace=workspace, selection=selection, local=local
+    )
     _write_bootstrap_config(workspace, selection, storage_env)
 
     # 2) Per-provider agents + orchestrator prompt
     for provider in selection.providers():
-        _setup_provider_assets(workspace, loader, provider)
+        _setup_provider_assets(workspace, loader, provider, use_symlinks=use_symlinks)
 
     # 3) Bundled skills installer (idempotent — only writes if missing)
-    _install_bundled_skills(workspace, loader)
+    _install_bundled_skills(workspace, loader, use_symlinks=use_symlinks)
 
     _write_workspace_sha(workspace, current_sha)
 
@@ -338,7 +354,7 @@ def abort_project_cmd(project_id: str, reason: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _copy_skills(loader: AssetLoader, target: Path) -> None:
+def _copy_skills(loader: AssetLoader, target: Path, *, use_symlinks: bool = True) -> None:
     target.mkdir(parents=True, exist_ok=True)
     bundled = loader.bundled_skills_dir()
     if not bundled.exists():
@@ -347,10 +363,17 @@ def _copy_skills(loader: AssetLoader, target: Path) -> None:
     for skill_dir in iter_skill_directories(bundled):
         dest = target / skill_dir.name
         dest.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(skill_dir / "SKILL.md", dest / "SKILL.md")
+        src = skill_dir / "SKILL.md"
+        dest_file = dest / "SKILL.md"
+        if use_symlinks:
+            if dest_file.is_symlink() and dest_file.resolve() == src.resolve():
+                continue
+            _atomic_symlink(src.resolve(), dest_file)
+        else:
+            shutil.copy2(src, dest_file)
 
 
-def _install_bundled_skills(workspace: Path, loader: AssetLoader) -> int:
+def _install_bundled_skills(workspace: Path, loader: AssetLoader, *, use_symlinks: bool = True) -> int:
     """Install bundled skills into per-provider skill dirs.
 
     Mirrors `_setup_provider_assets` so `init` runs the skills installer even
@@ -373,7 +396,7 @@ def _install_bundled_skills(workspace: Path, loader: AssetLoader) -> int:
                 continue
             seen.add(dest)
             if not dest.exists() or not any(dest.glob("*/SKILL.md")):
-                _copy_skills(loader, dest)
+                _copy_skills(loader, dest, use_symlinks=use_symlinks)
                 click.echo(f"Installed bundled skills to {dest}")
             installed += 1
     return installed
@@ -423,10 +446,13 @@ def _storage_env(
     zenith_home: str | None,
     workspace: Path,
     selection: ProviderSelection,
+    local: bool = False,
 ) -> dict[str, str]:
     env: dict[str, str] = {}
     if zenith_home:
         env["ZENITH_HOME"] = str(Path(zenith_home).expanduser().resolve())
+    if local:
+        env["ZENITH_LOCAL"] = "true"
     return env
 
 
@@ -540,11 +566,13 @@ def _setup_provider_assets(
     workspace: Path,
     loader: AssetLoader,
     provider: ProviderDefinition,
+    *,
+    use_symlinks: bool = True,
 ) -> None:
     if provider.agent_output_dir:
         agents_dir = workspace / provider.agent_output_dir
         _copy_provider_agents(
-            loader, agents_dir, provider.name
+            loader, agents_dir, provider.name, use_symlinks=use_symlinks
         )
         click.echo(f"Installed {provider.name} subagents to {agents_dir}")
     # Install bundled skills into the host-agent skill surface so the
@@ -554,7 +582,7 @@ def _setup_provider_assets(
     # (including project-authored ones) into these dirs.
     for rel in provider.skill_dirs:
         dest = workspace / rel
-        _copy_skills(loader, dest)
+        _copy_skills(loader, dest, use_symlinks=use_symlinks)
         click.echo(f"Installed bundled skills to {dest}")
     if provider.orchestrator_prompt_output_path:
         path = workspace / provider.orchestrator_prompt_output_path
@@ -565,11 +593,31 @@ def _setup_provider_assets(
             click.echo(f"Created {path}")
 
 
-def _copy_provider_agents(loader: AssetLoader, target: Path, provider_name: str) -> None:
+def _copy_provider_agents(loader: AssetLoader, target: Path, provider_name: str, *, use_symlinks: bool = True) -> None:
     bundled = loader.bundled_agents_dir(provider_name)
     if not bundled.exists():
         return
     target.mkdir(parents=True, exist_ok=True)
     for agent_file in sorted(bundled.glob("*")):
         if agent_file.is_file():
-            shutil.copy2(agent_file, target / agent_file.name)
+            dest = target / agent_file.name
+            if use_symlinks:
+                if dest.is_symlink() and dest.resolve() == agent_file.resolve():
+                    continue
+                _atomic_symlink(agent_file.resolve(), dest)
+            else:
+                shutil.copy2(agent_file, dest)
+
+
+def _atomic_symlink(source: Path, dest: Path) -> None:
+    """Atomically replace *dest* with a symlink pointing at *source*.
+
+    Creates a temp symlink in dest's parent dir, then renames it over dest.
+    """
+    import tempfile
+
+    fd, tmp_path = tempfile.mkstemp(dir=dest.parent, prefix=".tmp_")
+    os.close(fd)
+    os.unlink(tmp_path)
+    os.symlink(source, tmp_path)
+    os.rename(tmp_path, str(dest))
