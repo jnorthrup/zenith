@@ -164,8 +164,10 @@ def _render_contract_lines(json_bytes: bytes, nars: list[str]) -> list[str]:
         lines.append("")
 
     rest_items = items[1:]
-    if rest_items:
-        rest_dict = dict(rest_items)
+    rest_dict = dict(rest_items) if rest_items else {}
+    rest_dict.pop("nars", None)
+    
+    if rest_dict:
         rest_json = json.dumps(rest_dict, ensure_ascii=False, separators=(',', ':'))
         lines.append(f'],{rest_json[1:]}')
     else:
@@ -177,7 +179,7 @@ def _render_contract_lines(json_bytes: bytes, nars: list[str]) -> list[str]:
 def _inject_nars(json_bytes: bytes, nars: list[str]) -> str:
     """Inject nars array after the first field (id) in JSON for head -n10."""
     lines = _render_contract_lines(json_bytes, nars)
-    return "\n".join(lines[:10])
+    return "\n".join(lines)
 
 
 def render_contract_head(json_path: Path, nars: list[str]) -> str:

@@ -66,11 +66,12 @@ def promote_nars_to_jules_landscape(
     from .storage import ProjectStore
     from .contractreifier import render_contract_head
 
-    store = ProjectStore(Path(workspace_dir) / ".zenith")
+    from .config import HarnessConfig
+    store = ProjectStore(HarnessConfig.discover())
     contract_state = store.load_contract_state(project_id, mission_id)
 
     # Find all contract assertion files
-    contract_dir = Path(workspace_dir) / ".zenith" / project_id / "contract"
+    contract_dir = store.contract_dir(project_id, mission_id)
     if not contract_dir.exists():
         return []
 
