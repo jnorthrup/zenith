@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -88,11 +89,29 @@ class AssetLoader:
         return results
 
     def load_prompt_file(self, session_type: str, relative_path: str) -> str:
-        """Read a bundled prompt file under `bundled/prompts/<session_type>/`."""
+        """Read a bundled prompt file under `bundled/prompts/<session_type>/`.
+        
+        Supports includes: <!-- include: _shared/filename.md --> is replaced with
+        the content of that file from the _shared directory.
+        """
         path = self.config.bundled_dir / "prompts" / session_type / relative_path
         if not path.exists():
             raise FileNotFoundError(f"Prompt file not found: {path}")
-        return path.read_text(encoding="utf-8")
+        content = path.read_text(encoding="utf-8")
+        
+        # Handle includes: <!-- include: _shared/filename.md -->
+        include_pattern = re.compile(r'<!--\s*include:\s*([^\s]+)\s*-->')
+        
+        def replace_include(match):
+            include_path = match.group(1)
+            # Resolve relative to the prompts root
+            shared_path = self.config.bundled_dir / "prompts" / include_path
+            if shared_path.exists():
+                return shared_path.read_text(encoding="utf-8")
+            return f"[INCLUDE NOT FOUND: {include_path}]"
+        
+        content = include_pattern.sub(replace_include, content)
+        return content
 
     def render_prompt_template(
         self,
