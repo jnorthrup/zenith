@@ -97,7 +97,7 @@ class HarnessConfig:
         worker_acp_command = os.environ.get("ZENITH_WORKER_ACP_COMMAND")
         explicit_validator_provider = "ZENITH_VALIDATOR_PROVIDER" in os.environ
         validator_provider_name = os.environ.get("ZENITH_VALIDATOR_PROVIDER") or default_validator_provider_name(
-            worker_provider_name, explicit_worker_provider
+            orchestrator_provider_name, worker_provider_name, explicit_worker_provider
         )
         validator_acp_command = os.environ.get("ZENITH_VALIDATOR_ACP_COMMAND")
         terminal_reviewer_provider_name = os.environ.get(

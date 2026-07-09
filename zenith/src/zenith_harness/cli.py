@@ -460,8 +460,8 @@ def _resolve_selection(
     orch = orchestrator or agent or "claude"
     explicit_worker = worker is not None or (agent is not None and agent in provider_names_for_role("worker"))
     wrk = worker or (agent if agent in provider_names_for_role("worker") else None) or default_worker_provider_name(orch)
-    # Default validator: use local provider when worker is remote to avoid Jules validation slop
-    val = validator or (None if explicit_worker else None) or default_validator_provider_name(wrk, explicit_worker)
+    # Default validator: use orchestrator (local) when worker is remote to avoid validation slop
+    val = validator or default_validator_provider_name(orch, wrk, explicit_worker)
     return ProviderSelection(
         orchestrator=get_provider(orch),
         worker=get_provider(wrk),

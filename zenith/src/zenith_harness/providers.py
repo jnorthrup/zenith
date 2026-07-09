@@ -190,13 +190,14 @@ def default_worker_provider_name(orchestrator_provider_name: str) -> str:
     return "claude"
 
 
-def default_validator_provider_name(worker_provider_name: str | None, explicit_worker: bool) -> str:
-    """Default validator: use local provider to avoid Jules validation failures.
+def default_validator_provider_name(orchestrator_provider_name: str, worker_provider_name: str | None, explicit_worker: bool) -> str:
+    """Default validator: use orchestrator (local) provider to avoid remote validation slop.
     
     When worker is explicitly set to a remote provider (jules), default validator
     to local execution so read-only validation can call end_node() directly.
+    Uses orchestrator as the default local provider.
     """
-    if explicit_worker and worker_provider_name != "claude":
-        # Worker is remote (jules) - use local validator to avoid remote validation slop
-        return "claude"
-    return "claude"
+    if explicit_worker and worker_provider_name != orchestrator_provider_name:
+        # Worker is different from orchestrator - use orchestrator for validation
+        return orchestrator_provider_name
+    return orchestrator_provider_name
