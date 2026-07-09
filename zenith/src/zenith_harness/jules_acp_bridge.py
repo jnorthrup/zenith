@@ -100,13 +100,17 @@ def promote_nars_to_jules_landscape(
         if not nars_lines:
             continue
 
+        contract_json = store.mission_dir(project_id, mission_id) / "assertions" / f"{assertion_id}.json"
+        if not contract_json.exists():
+            continue
+
         # Create 10-line JSON artifact in Jules-accessible location
         output_dir = Path(workspace_dir) / ".zenith" / "jules_contracts"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         output_file = output_dir / f"{assertion_id}.json"
         contract_head = render_contract_head(
-            contract_file,
+            contract_json,
             nars_lines[:9],  # Max 9 NARS terms
         )
 
