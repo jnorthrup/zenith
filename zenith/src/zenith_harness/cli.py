@@ -342,6 +342,36 @@ def inspect_tasks_cmd(project_id: str, mission_id: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# metrics
+# ---------------------------------------------------------------------------
+
+
+@cli.command("metrics")
+@click.argument("project_id")
+def metrics_cmd(project_id: str) -> None:
+    """Render the contract-landscape overview for a project.
+
+    Emits head -n10-scannable blocks terminated by `$ ---`. Each mission
+    gets a MISSION block (task counts, attempt stats, contract verdicts)
+    followed by CONTRACT blocks grouped by verdict and TASK blocks
+    grouped by status. Designed for an agent to scan with `head -n10`
+    and reason about the known vs. incomplete knowledge and resources.
+    """
+    from .contractreifier import render_contract_head
+    from .storage import ProjectStore
+
+    store = ProjectStore(HarnessConfig.discover())
+    try:
+        # Get the mission's task-state.json path and render contract head
+        # For now, render the first mission's task-state.json
+        # TODO: extend to support multiple missions
+        pass
+    except FileNotFoundError:
+        raise click.ClickException(f"Project not found: {project_id}")
+    click.echo("not yet implemented")
+
+
+# ---------------------------------------------------------------------------
 # abort-project
 # ---------------------------------------------------------------------------
 

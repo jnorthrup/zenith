@@ -154,6 +154,7 @@ def _acp_subprocess_env(provider) -> dict[str, str]:
             from .jules_acp_bridge import _token_manager
             token = _token_manager.get_token()
             if token:
+                # Pass OAuth token to subprocess for Jules CLI
                 env["JULES_API_KEY"] = token
         except Exception:
             pass
@@ -712,6 +713,20 @@ class ACPNodeRunner:
         )
         role_config = self.config.for_role(role)
         acp_command = role_config.resolved_worker_acp_command
+
+        # Bijective launch: when Jules is worker, launch both LLM agent AND Jules agent
+        # Skip if already in bijective mode (to avoid infinite recursion)
+        if role_config.worker_provider.name == "jules" and not getattr(self, "_in_bijective_mode", False):
+            return await self._run_jules_bijective(
+                task=task,
+                project_id=project_id,
+                mission_id=mission_id,
+                spawn_ts=spawn_ts,
+                store=store,
+                cwd=cwd,
+                progress_callback=progress_callback,
+            )
+
         if not acp_command:
             raise RuntimeError(
                 f"No ACP command for role={role}. Set ZENITH_{role.upper()}_ACP_COMMAND."
@@ -1084,6 +1099,231 @@ class ACPNodeRunner:
             ) from exc
 
     # ------------------------------------------------------------------
+    # Bijective Jules Launch
+    # ------------------------------------------------------------------
+
+    async def _run_jules_bijective(
+        self,
+        task: Task,
+        project_id: str,
+        mission_id: str,
+        spawn_ts: str,
+        store: ProjectStore,
+        cwd: str | Path | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> NodeHandoff:
+        """Run task with bijective LLM + Jules agents.
+
+        Launches both an LLM agent (via ACP) and a Jules agent simultaneously.
+        Returns when both complete, with NARS promoted on terminal state.
+        """
+        from .models import WorkHandoff, ValidateHandoff
+        from .jules_acp_bridge import (
+            BridgeError,
+            launch_jules_bijective,
+            _poll_jules_cli,
+            promote_nars_to_jules_landscape,
+        )
+
+        workspace_dir = str(Path(cwd).expanduser().resolve() if cwd else store.workspace_dir(project_id))
+        project_bucket = str(store.zenith_dir(project_id))
+        handoff_path = store.attempt_path(project_id, mission_id, spawn_ts, task.id)
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build the prompt
+        first_message = self._render_prompts(
+            task=task,
+            mission_id=mission_id,
+            project_bucket=project_bucket,
+            workspace_dir=workspace_dir,
+            store=store,
+            project_id=project_id,
+            provider_name="jules",
+        )
+
+        # Ensure Jules is authenticated via OAuth before launching
+        from .jules_acp_bridge import ensure_jules_authenticated
+        if not ensure_jules_authenticated():
+            raise BridgeError("Jules authentication failed")
+
+        # Launch Jules agent bijectively
+        jules_remote_id, jules_state = await launch_jules_bijective(
+            prompt_text=first_message,
+            cwd=workspace_dir,
+            task_id=task.id,
+            project_id=project_id,
+            mission_id=mission_id,
+        )
+
+        # Also launch LLM agent via ACP for bijective execution
+        # Use a non-Jules provider for the LLM agent (default: claude)
+        from .providers import get_provider
+        llm_provider = get_provider("claude")
+
+        # Build a temporary config that uses the LLM provider
+        from .config import HarnessConfig
+        role_config = self.config.for_role("worker")
+
+        # Launch LLM agent in parallel with Jules
+        llm_handoff = await self._run_llm_agent(
+            task=task,
+            project_id=project_id,
+            mission_id=mission_id,
+            spawn_ts=spawn_ts,
+            store=store,
+            cwd=cwd,
+            progress_callback=progress_callback,
+        )
+
+        # Poll Jules until terminal state
+        from .jules_acp_bridge import STATUS_POLL_SECONDS
+        while not jules_state.is_terminal:
+            await asyncio.sleep(STATUS_POLL_SECONDS)
+            jules_state = await _poll_jules_cli(jules_remote_id, workspace_dir)
+
+        # NOT GREEDY: Only promote NARS when both agents complete
+        nars_promoted = promote_nars_to_jules_landscape(
+            project_id, mission_id, workspace_dir
+        )
+
+        # Combine results - both must succeed for task to be done
+        done = llm_handoff.done and jules_state.succeeded
+        report = f"LLM: {llm_handoff.report}\n\nJules: {jules_state.raw}\n\nNARS promoted: {nars_promoted}"
+
+        if task.type == "validate":
+            # For validation tasks, we need items - use LLM's validation result
+            validate_items = getattr(llm_handoff, "items", [])
+            return ValidateHandoff(
+                node_id=task.id,
+                done=done,
+                report=report,
+                items=validate_items,
+                passed=done,
+            )
+
+        return WorkHandoff(
+            node_id=task.id,
+            done=done,
+            report=report,
+            request_attention=False,
+        )
+
+    async def _run_llm_agent(
+        self,
+        task: Task,
+        project_id: str,
+        mission_id: str,
+        spawn_ts: str,
+        store: ProjectStore,
+        cwd: str | Path | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> NodeHandoff:
+        """Run LLM agent via ACP (non-Jules provider).
+
+        Directly spawns ACP with Claude provider - bypasses jules bijective.
+        """
+        from .providers import get_provider
+
+        workspace_dir = str(Path(cwd).expanduser().resolve() if cwd else store.workspace_dir(project_id))
+        project_bucket = str(store.zenith_dir(project_id))
+        handoff_path = store.attempt_path(project_id, mission_id, spawn_ts, task.id)
+        handoff_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Use claude provider for LLM agent
+        provider = get_provider("claude")
+
+        # Build prompt
+        first_message = self._render_prompts(
+            task=task,
+            mission_id=mission_id,
+            project_bucket=project_bucket,
+            workspace_dir=workspace_dir,
+            store=store,
+            project_id=project_id,
+            provider_name="claude",
+        )
+
+        # Build ACP command for claude
+        acp_command = "claude-agent-acp"
+        from .acp_runner import _augment_acp_command, _acp_subprocess_env
+        acp_command = _augment_acp_command(acp_command, provider)
+
+        acp_env = _acp_subprocess_env(provider)
+        acp_env["ZENITH_HANDOFF_PATH"] = str(handoff_path)
+        acp_env["ZENITH_NODE_ID"] = task.id
+        acp_env["ZENITH_NODE_TYPE"] = task.type
+        acp_env["ZENITH_PROJECT_ID"] = project_id
+        acp_env["ZENITH_MISSION_ID"] = mission_id
+        acp_env["ZENITH_HOME"] = str(self.config.harness_home)
+
+        mcp_port = await self._allocate_free_port()
+        mcp_process = None
+
+        try:
+            mcp_process = await self._start_worker_mcp_server(
+                task=task,
+                project_id=project_id,
+                mission_id=mission_id,
+                handoff_path=str(handoff_path),
+                workspace_dir=workspace_dir,
+                mcp_port=mcp_port,
+            )
+            try:
+                await self._wait_for_server_ready("127.0.0.1", mcp_port)
+            except TimeoutError:
+                if mcp_process.returncode is None:
+                    mcp_process.terminate()
+                await _close_subprocess(mcp_process, timeout=5)
+                from .models import WorkHandoff
+                return WorkHandoff(
+                    node_id=task.id,
+                    done=False,
+                    report="Worker MCP server failed to start",
+                    request_attention=False,
+                )
+
+            mcp_cfg = {
+                "type": "http",
+                "name": "zenith-worker",
+                "url": f"http://127.0.0.1:{mcp_port}/mcp",
+                "headers": [],
+                "env": [],
+            }
+
+            prompt_stop_reason, worker_exit_code, worker_stderr, session_error = await self._execute_acp_subprocess(
+                acp_command=acp_command,
+                workspace_dir=workspace_dir,
+                acp_env=acp_env,
+                provider=provider,
+                mcp_cfg=mcp_cfg,
+                first_message=first_message,
+                report_path=handoff_path,
+                progress_callback=progress_callback,
+            )
+        finally:
+            async with _port_lock:
+                _allocated_ports.discard(mcp_port)
+            if mcp_process is not None:
+                if mcp_process.returncode is None:
+                    try:
+                        mcp_process.terminate()
+                    except OSError:
+                        pass
+                await _close_subprocess(mcp_process, timeout=5)
+
+        if handoff_path.exists():
+            return self._parse_handoff_file(handoff_path, task)
+
+        return self._synthesize_and_persist_missing_handoff(
+            handoff_path=handoff_path,
+            task=task,
+            stop_reason=prompt_stop_reason,
+            exit_code=worker_exit_code,
+            stderr=worker_stderr,
+            session_error=session_error,
+        )
+
+    # ------------------------------------------------------------------
     # Prompt rendering
     # ------------------------------------------------------------------
 
@@ -1129,9 +1369,20 @@ class ACPNodeRunner:
         attempts_dir = str(store.attempts_dir(project_id, mission_id))
         agents_path = str(Path(project_bucket) / "agents")
         memory_path = str(Path(project_bucket) / "MEMORY.md")
-        contract_target_paths = "\n".join(f"- `{t}`" for t in task.targets)
         skill_name = task.skill or "none"
         assignment_body = task.body
+
+        # Lazy NARS conversion: convert contracts to 10-line header format
+        # This runs for non-Jules (local LLM) agents. Jules gets synchronous
+        # conversion via promote_nars_to_jules_landscape() on terminal state.
+        contract_targets = []
+        for target in task.targets:
+            # ensure_contract_nars does lazy conversion: if .md exists but lacks
+            # NARS header, it converts from .json (if exists) and updates .md
+            store.ensure_contract_nars(project_id, mission_id, target)
+            contract_targets.append(target)
+
+        contract_target_paths = "\n".join(f"- `{t}`" for t in contract_targets)
 
         return {
             "assignment_body": assignment_body,

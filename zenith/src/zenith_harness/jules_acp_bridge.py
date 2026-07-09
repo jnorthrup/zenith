@@ -24,7 +24,109 @@ STATUS_POLL_SECONDS = float(os.environ.get("JULES_POLL_SECONDS", "5"))
 MAX_TRANSIENT_RETRIES = int(os.environ.get("JULES_MAX_TRANSIENT_RETRIES", "3"))
 TRANSIENT_BACKOFF_S = float(os.environ.get("JULES_TRANSIENT_BACKOFF_S", "5.0"))
 JULES_BIN = os.environ.get("JULES_BIN", "jules")
+
+
+# -----------------------------------------------------------------------
+# OAuth Auto-Login
+# -----------------------------------------------------------------------
+def ensure_jules_authenticated() -> bool:
+    """Ensure Jules is authenticated via OAuth.
+
+    Triggers `jules login` to cache OAuth credentials, then uses gcloud
+    to get the Bearer token for API calls. NOT GREEDY: only attempts
+    login when explicitly called.
+    """
+    # Use TokenManager to get OAuth token - this handles jules login + gcloud
+    token = _token_manager.get_token()
+    return bool(token)
+
+
+# -----------------------------------------------------------------------
+# NARS Contract Promotion Trigger
+# NOT GREEDY: Only fires on explicit trigger conditions
+# -----------------------------------------------------------------------
+
+
+def promote_nars_to_jules_landscape(
+    project_id: str,
+    mission_id: str,
+    workspace_dir: str,
+) -> list[str]:
+    """Promote NARS contracts to Jules workspace landscape.
+
+    NOT GREEDY: This function is triggered explicitly - e.g., when Jules
+    session completes and needs the contract assertions rendered on-disk.
+
+    Reads contract/ directory and renders 10-line JSON+contract artifacts
+    into .zenith/contracts/ for Jules to consume.
+
+    Returns list of promoted contract file paths.
+    """
+    from pathlib import Path
+    from .storage import ProjectStore
+    from .contractreifier import render_contract_head
+
+    store = ProjectStore(Path(workspace_dir) / ".zenith")
+    contract_state = store.load_contract_state(project_id, mission_id)
+
+    # Find all contract assertion files
+    contract_dir = Path(workspace_dir) / ".zenith" / project_id / "contract"
+    if not contract_dir.exists():
+        return []
+
+    promoted: list[str] = []
+
+    # Render each contract assertion as 10-line JSON
+    for contract_file in sorted(contract_dir.glob("*.md")):
+        assertion_id = contract_file.stem
+        cs_entry = contract_state.items.get(assertion_id)
+
+        # Only promote contracts that have been validated (passed or failed)
+        if cs_entry is None or cs_entry.status not in ("passed", "failed"):
+            continue
+
+        # Read NARS terms from contract file
+        contract_text = contract_file.read_text(encoding="utf-8")
+
+        # Extract NARS statements - look for lines starting with -
+        nars_lines = []
+        for line in contract_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- "):
+                nars_lines.append(stripped[2:])
+            elif stripped.startswith("* "):
+                nars_lines.append(stripped[2:])
+
+        if not nars_lines:
+            continue
+
+        # Create 10-line JSON artifact in Jules-accessible location
+        output_dir = Path(workspace_dir) / ".zenith" / "jules_contracts"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_file = output_dir / f"{assertion_id}.json"
+        contract_head = render_contract_head(
+            contract_file,
+            nars_lines[:9],  # Max 9 NARS terms
+        )
+
+        output_file.write_text(contract_head, encoding="utf-8")
+        promoted.append(str(output_file))
+
+    return promoted
+
+
 class TokenManager:
+    """Manages Jules authentication tokens.
+
+    Two authentication methods:
+    1. JULES_API_KEY - explicit API key (used directly if set)
+    2. OAuth - via `jules login` + gcloud (fallback if no API key)
+
+    The Jules API requires OAuth Bearer tokens, but JULES_API_KEY can be
+    used directly for testing or when explicitly provided.
+    """
+
     def __init__(self) -> None:
         self._token = None
 
@@ -32,21 +134,39 @@ class TokenManager:
         if not force_refresh and self._token:
             return self._token
 
+        # First check: explicit JULES_API_KEY takes priority
         env_key = os.environ.get("JULES_API_KEY", "")
-        # If JULES_API_KEY looks like a test key, return it as-is
-        if env_key and not env_key.startswith("ya29.") and ("test" in env_key or env_key == "mock-key"):
+        if env_key:
             self._token = env_key
             return env_key
 
-        # Try to run gcloud auth print-access-token
+        # Second: OAuth fallback via jules login + gcloud
+        import subprocess
+        import shutil
+
+        # Check if jules binary exists
+        if not shutil.which("jules"):
+            raise BridgeError("Jules binary not found")
+
+        # Run jules login if needed (non-interactive, uses cached credentials)
         try:
-            import subprocess
+            subprocess.run(
+                ["jules", "login", "--no-launch-browser"],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception:
+            pass  # Cached credentials may already exist
+
+        # Get OAuth token from gcloud
+        try:
             res = subprocess.run(
                 ["gcloud", "auth", "print-access-token"],
                 capture_output=True,
                 text=True,
                 timeout=5,
-                check=False
+                check=False,
             )
             if res.returncode == 0:
                 token = res.stdout.strip()
@@ -56,14 +176,16 @@ class TokenManager:
         except Exception:
             pass
 
-        self._token = env_key
-        return env_key
+        return ""
 
     def has_api_key(self) -> bool:
+        """Check if we have valid credentials (explicit key or OAuth)."""
+        # Explicit key takes priority
         if os.environ.get("JULES_API_KEY"):
             return True
+        # Fallback: OAuth via jules + gcloud
         import shutil
-        return bool(shutil.which("gcloud"))
+        return bool(shutil.which("jules") and shutil.which("gcloud"))
 
 _token_manager = TokenManager()
 
@@ -72,7 +194,7 @@ def __getattr__(name: str) -> Any:
         return _token_manager.get_token()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://jules.googleapis.com/v1alpha")
+JULES_API_BASE = os.environ.get("JULES_API_BASE", "https://aida.googleapis.com/v1")
 PR_URL_RE = re.compile(r"https?://[^\s'\"]+/pull/\d+\b")
 ID_PATTERNS = (
     re.compile(r"(?i)\b(?:session|task)\s*id\s*[:=#]\s*([A-Za-z0-9_-]{3,})\b"),
@@ -186,6 +308,65 @@ async def _run_jules_cli(prompt_text: str, cwd: str) -> JulesRemoteState:
     if not remote_id:
         raise BridgeError(f"unable to parse Jules session/task id from output: {combined or '(empty output)'}")
     return await _poll_jules_cli(remote_id, cwd)
+
+
+# -----------------------------------------------------------------------
+# Bijective LLM + Jules Launch
+# -----------------------------------------------------------------------
+
+
+async def launch_jules_bijective(
+    prompt_text: str,
+    cwd: str,
+    task_id: str,
+    project_id: str,
+    mission_id: str,
+) -> tuple[str, JulesRemoteState]:
+    """Launch Jules as a bijective agent alongside LLM agent.
+
+    Returns (remote_id, initial_state). The remote_id is used to track
+    the Jules session for bijective sync.
+    """
+    create_args = [JULES_BIN, "remote", "new", "--repo", cwd, "--session", prompt_text]
+    code, stdout, stderr = await _run_command(create_args, cwd=cwd)
+    combined = _combine_output(stdout, stderr)
+    if code != 0:
+        raise BridgeError(_best_error(combined, f"jules remote new exited {code}"))
+
+    remote_id = _extract_remote_id(stdout) or _extract_remote_id(stderr)
+    if not remote_id:
+        raise BridgeError(f"unable to parse Jules session id from output: {combined or '(empty output)'}")
+
+    # Store the mapping for later sync
+    _save_jules_session(cwd, remote_id, task_id, project_id, mission_id)
+
+    # Return initial non-terminal state
+    return remote_id, JulesRemoteState(
+        remote_id=remote_id,
+        status="running",
+        raw=combined,
+        pr_url=None,
+    )
+
+
+def _save_jules_session(
+    cwd: str,
+    remote_id: str,
+    task_id: str,
+    project_id: str,
+    mission_id: str,
+) -> None:
+    """Persist Jules session mapping for bijective tracking."""
+    store = _load_session_store(cwd)
+    store[remote_id] = {
+        "task_id": task_id,
+        "project_id": project_id,
+        "mission_id": mission_id,
+        "created_at": time.time(),
+    }
+    path = _session_store_path(cwd)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, store)
 
 
 async def _poll_jules_cli(remote_id: str, cwd: str) -> JulesRemoteState:
@@ -535,25 +716,9 @@ async def _run_prompt(prompt_text: str, cwd: str, *, transport: JsonRpcTransport
     if not prompt_text:
         raise BridgeError("empty session/prompt payload")
     await transport.notify_session_update(session_id, "Queued task for Jules remote execution.")
-    use_rest = _token_manager.has_api_key()
-    try:
-        if use_rest:
-            await transport.notify_session_update(session_id, "Using Jules REST transport.")
-            try:
-                state = await _run_jules_rest(prompt_text, cwd)
-            except BridgeError as exc:
-                await transport.notify_session_update(
-                    session_id,
-                    f"REST unavailable, falling back to Jules CLI: {exc}",
-                )
-                state = await _run_jules_cli(prompt_text, cwd)
-        else:
-            await transport.notify_session_update(session_id, "Using Jules CLI transport.")
-            state = await _run_jules_cli(prompt_text, cwd)
-    except BridgeError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise BridgeError(str(exc)) from exc
+    # CLI is the reliable path — REST endpoints differ by release and return 404
+    await transport.notify_session_update(session_id, "Using Jules CLI transport.")
+    state = await _run_jules_cli(prompt_text, cwd)
 
     await transport.notify_session_update(
         session_id,

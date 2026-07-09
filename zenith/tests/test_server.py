@@ -67,6 +67,7 @@ async def test_orchestrator_tools_registered(config: HarnessConfig) -> None:
         "decide_attention",
         "inspect_project",
         "abort_project",
+        "jules_ensure_auth",
         "jules_converse",
         "jules_bijective_sync",
     }

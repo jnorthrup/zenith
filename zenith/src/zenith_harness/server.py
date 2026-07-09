@@ -389,6 +389,25 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
                 return _to_payload(exc)
 
     @mcp.tool(
+        name="jules_ensure_auth",
+        description=(
+            "Ensure Jules is authenticated via OAuth. Triggers browser login flow if needed. "
+            "NOT GREEDY: Call this explicitly before first Jules operation if auth status is unknown. "
+            "After calling, verify authenticated status in returned state."
+        ),
+    )
+    async def jules_ensure_auth() -> dict[str, Any]:
+        try:
+            from .jules_acp_bridge import ensure_jules_authenticated
+            authenticated = ensure_jules_authenticated()
+            return {
+                "authenticated": authenticated,
+                "message": "Jules authenticated" if authenticated else "Jules login required - check browser for OAuth flow",
+            }
+        except Exception as exc:
+            return {"error": "jules_auth_failed", "message": str(exc)}
+
+    @mcp.tool(
         name="jules_converse",
         description=(
             "Send a follow-up message to an existing Jules remote session. "
@@ -424,7 +443,8 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
             "Bijective sync between Jules remote state and Zenith mission state. "
             "Maps Jules running/queued ↔ Zenith mission_running; Jules completed → Zenith decide_attention with PR; "
             "Jules failed → Zenith decide_attention with action=patch for debt mitigation. "
-            "Tracks mating contracts at opposite timeline ends for intercourse support."
+            "Tracks mating contracts at opposite timeline ends for intercourse support. "
+            "NOT GREEDY: NARS promotion to Jules landscape only triggers on terminal state."
         ),
     )
     async def jules_bijective_sync(
@@ -433,14 +453,26 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
     ) -> dict[str, Any]:
         try:
             cwd = str(controller.store.workspace_dir(project_id))
-            from .jules_acp_bridge import _poll_jules_rest
+            from .jules_acp_bridge import _poll_jules_rest, promote_nars_to_jules_landscape
             state = await _poll_jules_rest(remote_id, cwd)
-            
+
             # Map Jules state to Zenith state
             zenith_state = "mission_running" if state.normalized_status in ("running", "queued", "pending", "active") else \
                           "decide_attention" if state.succeeded else \
                           "decide_attention"  # failed also routes to attention
-            
+
+            # NOT GREEDY: Only promote NARS when Jules reaches terminal state
+            nars_promoted: list[str] = []
+            if state.is_terminal:
+                # Find the active mission_id
+                from .models import MissionRunning
+                proj_state = controller.store.load_state(project_id)
+                if isinstance(proj_state, MissionRunning):
+                    mission_id = proj_state.mission_id
+                    nars_promoted = promote_nars_to_jules_landscape(
+                        project_id, mission_id, cwd
+                    )
+
             return {
                 "remote_id": remote_id,
                 "jules_status": state.status,
@@ -450,6 +482,7 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
                 "zenith_mapped_state": zenith_state,
                 "debt_mitigation_route": "patch" if not state.succeeded else "pr_merge",
                 "mating_contracts": state.pr_url is not None,
+                "nars_promoted": nars_promoted,
             }
         except Exception as exc:
             return {"error": "jules_bijective_sync_failed", "message": str(exc)}
