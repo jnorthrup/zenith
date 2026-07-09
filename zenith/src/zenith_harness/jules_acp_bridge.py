@@ -451,6 +451,8 @@ async def _rest_json(method: str, url: str, payload: JSON | None = None) -> Any:
         headers = {"Accept": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
+            if token.startswith("AIzaSy"):
+                headers["x-goog-api-key"] = token
         if payload is not None:
             headers["Content-Type"] = "application/json"
             body = json.dumps(payload).encode("utf-8")

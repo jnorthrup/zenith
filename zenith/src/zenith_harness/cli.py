@@ -383,10 +383,14 @@ def _copy_skills(loader: AssetLoader, target: Path, *, use_symlinks: bool = True
         src = skill_dir / "SKILL.md"
         dest_file = dest / "SKILL.md"
         if use_symlinks:
+            if dest_file.exists() and not dest_file.is_symlink():
+                dest_file.unlink()
             if dest_file.is_symlink() and dest_file.resolve() == src.resolve():
                 continue
             _atomic_symlink(src.resolve(), dest_file)
         else:
+            if dest_file.is_symlink():
+                dest_file.unlink()
             shutil.copy2(src, dest_file)
 
 
@@ -613,9 +617,13 @@ def _setup_provider_assets(
         path.parent.mkdir(parents=True, exist_ok=True)
         source = loader.config.bundled_dir / "prompts" / "orchestrator" / "system_prompt.md"
         if use_symlinks and source.exists():
+            if path.exists() and not path.is_symlink():
+                path.unlink()
             if not (path.is_symlink() and path.resolve() == source.resolve()):
                 _atomic_symlink(source.resolve(), path)
         else:
+            if path.is_symlink():
+                path.unlink()
             if not path.exists():
                 body = loader.load_prompt_file("orchestrator", "system_prompt.md")
                 path.write_text(body, encoding="utf-8")
@@ -630,10 +638,14 @@ def _copy_provider_agents(loader: AssetLoader, target: Path, provider_name: str,
         if agent_file.is_file():
             dest = target / agent_file.name
             if use_symlinks:
+                if dest.exists() and not dest.is_symlink():
+                    dest.unlink()
                 if dest.is_symlink() and dest.resolve() == agent_file.resolve():
                     continue
                 _atomic_symlink(agent_file.resolve(), dest)
             else:
+                if dest.is_symlink():
+                    dest.unlink()
                 shutil.copy2(agent_file, dest)
 
 
