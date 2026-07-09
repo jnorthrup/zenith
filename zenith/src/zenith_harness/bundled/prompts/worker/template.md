@@ -18,6 +18,10 @@ Read and satisfy these contract files before editing:
 
 {{ contract_target_paths }}
 
+## Contract Assertions
+
+{{ contract_assertions }}
+
 ## Prior Work
 
 Prior attempt reports, if relevant:

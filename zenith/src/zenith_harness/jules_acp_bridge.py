@@ -58,10 +58,11 @@ def ensure_jules_authenticated() -> bool:
     return bool(token)
 
 
-# ---------------------------------------------------------------------------
-# NARS Contract Promotion Trigger
+# -----------------------------------------------------------------------------
+# NARS (Non-Axiomatic Reasoning System) Contract Promotion Trigger
+# NARS = Non-Axiomatic Reasoning System (Pei Wang's logic)
 # NOT GREEDY: Only fires on explicit trigger conditions
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 
 def promote_nars_to_jules_landscape(
@@ -69,19 +70,19 @@ def promote_nars_to_jules_landscape(
     mission_id: str,
     workspace_dir: str,
 ) -> list[str]:
-    """Promote NARS contracts to Jules workspace landscape.
+    """Promote NARS (Non-Axiomatic Reasoning System) contracts to Jules workspace landscape.
 
     NOT GREEDY: This function is triggered explicitly - e.g., when Jules
     session completes and needs the contract assertions rendered on-disk.
 
-    Reads contract/ directory and renders 10-line JSON+contract artifacts
-    into .zenith/contracts/ for Jules to consume.
+    Reads contract/ directory and extracts NARS (Non-Axiomatic Reasoning System) terms from markdown files,
+    writing plain JSON with NARS (Non-Axiomatic Reasoning System) list to .zenith/jules_contracts/ for Jules.
 
     Returns list of promoted contract file paths.
     """
     from pathlib import Path
+    import json
     from .storage import ProjectStore
-    from .contractreifier import render_contract_head
     from .config import HarnessConfig
 
     store = ProjectStore(HarnessConfig.discover())
@@ -102,24 +103,28 @@ def promote_nars_to_jules_landscape(
 
         contract_text = contract_file.read_text(encoding="utf-8")
         nars_lines = []
+        in_nars_section = False
         for line in contract_text.splitlines():
             stripped = line.strip()
-            if stripped.startswith("- ") or stripped.startswith("* "):
+            if stripped.startswith("## NARS") or stripped.startswith("## nars"):  # NARS = Non-Axiomatic Reasoning System
+                in_nars_section = True
+                continue
+            if in_nars_section and (stripped.startswith("- ") or stripped.startswith("* ")):
                 nars_lines.append(stripped[2:])
+            elif in_nars_section and stripped and not stripped.startswith("#"):
+                # End of NARS (Non-Axiomatic Reasoning System) section
+                in_nars_section = False
 
         if not nars_lines:
-            continue
-
-        contract_json = store.mission_dir(project_id, mission_id) / "assertions" / f"{assertion_id}.json"
-        if not contract_json.exists():
             continue
 
         output_dir = Path(workspace_dir) / ".zenith" / "jules_contracts"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         output_file = output_dir / f"{assertion_id}.json"
-        contract_head = render_contract_head(contract_json, nars_lines[:9])
-        output_file.write_text(contract_head, encoding="utf-8")
+        # Write plain JSON with NARS (Non-Axiomatic Reasoning System) list (no reification formatting)
+        data = {"id": assertion_id, "nars": nars_lines}
+        output_file.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         promoted.append(str(output_file))
 
     return promoted
@@ -423,7 +428,7 @@ def mailbox_dir(cwd: str | Path) -> Path:
 def mission_mailbox_path(cwd: str | Path, slug: str) -> Path:
     """Mailbox file for a mission (slug = mission id).
 
-    The first line is the contract header (via contractreifier.render_full_with_contract).
+    The first line is the contract header (plain markdown summary).
     Subsequent lines are envelope events.
 
     Security: enforces that the resulting path stays inside the mailbox directory.
@@ -515,7 +520,9 @@ def append_mission_mailbox(
 ) -> Path:
     """Append an envelope to a mission's mailbox.
 
-    The envelope is NARS-anchored: ``nars`` must be non-empty (the scope discipline).
+    The envelope is NARS-anchored (Non-Axiomatic Reasoning System): ``nars`` must be non-empty (the scope discipline).
+    NARS = Non-Axiomatic Reasoning System (Pei Wang's logic).
+
     ``body`` is capped at 200 chars.
     """
     if nars is None:

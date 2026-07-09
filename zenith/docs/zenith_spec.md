@@ -87,16 +87,17 @@ If a REST request returns a `401 Unauthorized` status code, the `TokenManager` f
 
 ---
 
-## 4. NARS Contract Representation
+## 4. Contract Format
 
-Contracts in Zenith are structured as markdown documents (`contract/<ID>.md`). To make these files scannable and readable by external parsers, they are augmented with Pei Wang's Non-Axiomatic Reasoning System (NARS) statement logic.
+Contracts in Zenith are structured as markdown documents (`contract/<ID>.md`). This is the single source of truth - no JSON contracts or `contractreifier` code.
 
-### 4.1 Specification of head -n10 Summarization
-A valid Zenith contract JSON representation must adhere to a strict newline structure designed for scanning with the Unix utility `head -n10` or `ghead -n10`:
-- **Line 1**: `{ "id": "...", "nars": [`
-- **Lines 2-10**: Individual NARS logic statements (e.g., `"<A --> B>"` representing inheritance, or `<A ==> B>` representing implication) formatted as valid JSON strings with optional trailing commas. If there are fewer than 9 NARS terms, lines 4–10 are padded with empty strings to guarantee line alignment.
-- **Line 11+**: Closing array bracket `],` followed by the remainder of the JSON fields (such as `title`, `description`, etc.) and the final closing brace `}`.
+### 4.1 Contract File Structure
+
+Each contract assertion is a `.md` file in the mission's `contract/` directory:
+- Filename: `<assertion_id>.md`
+- Format: Plain markdown with title, description, and evidence sections
 
 ### 4.2 Code Hook Logic
-- **Lazy Conversion (Non-Jules)**: When the local LLM agent is dispatched, `_build_template_vars` invokes `ensure_contract_nars` to look up the `.json` contract metadata, generate the `## NARS` header, and rewrite the `.md` file to append NARS statements.
-- **Sync Promotion (Jules)**: Upon Jules completion, `promote_nars_to_jules_landscape` reads the contract targets and writes the NARS terms in the strict 10-line format directly into the Jules landscape directory (`.zenith/jules_contracts/`).
+
+- **Worker/Validator Dispatch**: When an agent is dispatched, `_build_template_vars` reads the `.md` files directly and inlines their content into the prompt template via `contract_assertions` and `contract_target_paths` variables.
+- **Jules NARS Promotion**: For Jules integration, `promote_nars_to_jules_landscape` reads the markdown files, extracts any `## NARS` sections found within, and writes plain JSON files (`.zenith/jules_contracts/<id>.json`) containing `{"id": "...", "nars": [...]}` - no reification formatting.

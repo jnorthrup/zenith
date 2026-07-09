@@ -471,18 +471,6 @@ class ACPClient:
         path.parent.mkdir(parents=True, exist_ok=True)
         content = params["content"]
         path.write_text(content, encoding="utf-8")
-
-        # If it is a JSON file containing a "nars" list, apply NARS 10-line formatting
-        if path.suffix.lower() == ".json":
-            try:
-                import json
-                data = json.loads(content)
-                if isinstance(data, dict) and "nars" in data and isinstance(data["nars"], list):
-                    from .contractreifier import render_full_with_contract
-                    formatted = render_full_with_contract(path, data["nars"])
-                    path.write_text(formatted, encoding="utf-8")
-            except Exception:
-                pass
         return {}
 
     async def _handle_terminal_create(self, params: dict[str, Any]) -> dict[str, str]:
@@ -1183,7 +1171,7 @@ class ACPNodeRunner:
         )
         report = (
             f"Jules session {jules_remote_id} launched (status={jules_state.status}). "
-            f"Mailbox slug={mission_id} — contract header via contractreifier, "
+            f"Mailbox slug={mission_id} — contract header via markdown, "
             f"mail held by main-loop turn batcher. Circle back via jules_bijective_sync."
         )
         return WorkHandoff(
@@ -1266,24 +1254,26 @@ class ACPNodeRunner:
         skill_name = task.skill or "none"
         assignment_body = task.body
 
-        # Lazy NARS conversion: convert contracts to 10-line header format
-        # This runs for non-Jules (local LLM) agents. Jules gets synchronous
-        # conversion via promote_nars_to_jules_landscape() on terminal state.
-        contract_targets = []
+        # Load contract assertions from markdown files
+        contract_assertions = []
+        contract_target_paths = []
         for target in task.targets:
-            # ensure_contract_nars does lazy conversion: if .md exists but lacks
-            # NARS header, it converts from .json (if exists) and updates .md
-            store.ensure_contract_nars(project_id, mission_id, target)
-            contract_targets.append(target)
+            contract_path = store.contract_assertion_path(project_id, mission_id, target)
+            if contract_path.exists():
+                contract_content = contract_path.read_text(encoding="utf-8")
+                contract_assertions.append(f"## Contract: {target}\n\n{contract_content}")
+                contract_target_paths.append(f"- `{target}`")
 
-        contract_target_paths = "\n".join(f"- `{t}`" for t in contract_targets)
+        contract_target_paths_str = "\n".join(contract_target_paths)
+        contract_assertions_str = "\n\n---\n\n".join(contract_assertions)
 
         return {
             "assignment_body": assignment_body,
             "skill_name": skill_name,
             "agents_path": agents_path,
             "memory_path": memory_path,
-            "contract_target_paths": contract_target_paths,
+            "contract_target_paths": contract_target_paths_str,
+            "contract_assertions": contract_assertions_str,
             "attempts_dir": attempts_dir,
         }
 

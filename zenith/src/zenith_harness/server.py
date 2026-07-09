@@ -715,7 +715,7 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
             "Jules completed-with-PR → Zenith decide_attention with PR merge route; "
             "Jules failed OR completed-without-PR → Zenith decide_attention with action=patch for debt mitigation. "
             "Tracks mating contracts at opposite timeline ends for intercourse support. "
-            "NOT GREEDY: NARS promotion to Jules landscape only triggers on terminal state."
+            "NOT GREEDY: NARS (Non-Axiomatic Reasoning System) promotion to Jules landscape only triggers on terminal state."
         ),
     )
     async def jules_bijective_sync(
@@ -746,7 +746,7 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
                 zenith_state = "decide_attention"
                 debt_route = "patch"
 
-            # NOT GREEDY: Only promote NARS when Jules reaches terminal state
+            # NOT GREEDY: Only promote NARS (Non-Axiomatic Reasoning System) when Jules reaches terminal state
             nars_promoted: list[str] = []
             if state.is_terminal:
                 from .models import MissionRunning
@@ -799,11 +799,11 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
     @mcp.tool(
         name="mission_mail",
         description=(
-            "Send or read mail within a mission's NARS-anchored mailbox. "
+            "Send or read mail within a mission's NARS-anchored mailbox. "  # NARS = Non-Axiomatic Reasoning System
             "Slug = mission id. The first line of the mailbox file is the "
-            "contract header (via contractreifier); subsequent lines are events. "
-            "Every event must carry NARS terms; body is capped at 200 chars. "
-            "Use to implement Jules-to-Jules post-PR discussion on shared NARS contracts."
+            "contract header (markdown summary); subsequent lines are events. "
+            "Every event must carry NARS terms (Non-Axiomatic Reasoning System logic); body is capped at 200 chars. "
+            "Use to implement Jules-to-Jules post-PR discussion on shared NARS (Non-Axiomatic Reasoning System) contracts."
         ),
     )
     async def mission_mail(
@@ -813,7 +813,7 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
         # Send params
         from_party: Annotated[str, Field(description="Sender: remote_id or 'orchestrator'.")] | None = None,
         to_party: Annotated[str, Field(description="Recipient: remote_id, 'orchestrator', or '*' for broadcast.")] | None = None,
-        nars: Annotated[list[str], Field(description="NARS terms (required for send).")] | None = None,
+        nars: Annotated[list[str], Field(description="NARS terms (Non-Axiomatic Reasoning System logic; required for send).")] | None = None,
         body: Annotated[str, Field(description="Body text (max 200 chars for send).")] | None = None,
         kind: Annotated[str, Field(description="Event kind: 'open', 'round', 'consensus', 'status'.")] = "round",
         # Read params

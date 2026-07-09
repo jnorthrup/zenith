@@ -308,19 +308,19 @@ class MailEnvelope(BaseModel):
 
     Mail is per-mission (keyed by ``slug`` = mission id). A mailbox file
     is the JSONL of envelopes for a single mission; the first envelope
-    is the contract header rendered by ``contractreifier`` for
-    ``head -n10`` scanning. Subsequent envelopes are events.
+    is the contract header (markdown summary). Subsequent envelopes are events.
 
     ``from_party`` and ``to_party`` identify the parties on the
     contract: a ``remote_id`` (Jules), or ``"orchestrator"`` (the LLM
     main loop). The slug is the filename, NOT a party — it is the
     mission's contract identifier.
 
-    ``nars`` is the load-bearing scope discipline: every envelope MUST
-    carry at least one NARS term from the mission contract. ``body`` is
+    NARS = Non-Axiomatic Reasoning System (Pei Wang's logic). The
+    ``nars`` field is the load-bearing scope discipline: every envelope MUST
+    carry at least one NARS (Non-Axiomatic Reasoning System) term from the mission contract. ``body`` is
     optional prose, capped at 200 chars. The orchestrator LLM uses
     ``nars`` to bound context — a picking-up agent reads only the
-    latest N envelopes, but always the contract NARS at the top.
+    latest N envelopes, but always the contract NARS (Non-Axiomatic Reasoning System) at the top.
     """
 
     model_config = ConfigDict(extra="forbid")

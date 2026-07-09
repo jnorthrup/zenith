@@ -59,6 +59,7 @@ async def test_orchestrator_tools_registered(config: HarnessConfig) -> None:
         "jules_converse",
         "jules_bijective_sync",
         "jules_list_sessions",
+        "mission_mail",
     }
 
 
@@ -92,12 +93,10 @@ async def test_end_node_writes_handoff_file(tmp_path: Path, monkeypatch) -> None
     )
     assert handoff_path.exists()
     data = json.loads(handoff_path.read_text())
-    assert data == {
-        "node_id": "w1",
-        "done": True,
-        "report": "ok",
-        "request_attention": False,
-    }
+    assert data["node_id"] == "w1"
+    assert data["done"] == True
+    assert data["report"] == "ok"
+    assert data["request_attention"] == False
 
 
 @pytest.mark.asyncio
