@@ -704,6 +704,90 @@ def _load_session_store(cwd: str) -> dict[str, Any]:
         return {}
 
 
+def _get_current_repo_name(cwd: str) -> str:
+    import subprocess
+    try:
+        res = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=5,
+            check=False,
+        )
+        if res.returncode == 0:
+            url = res.stdout.strip()
+            cleaned = url.rstrip("/").replace(".git", "")
+            if ":" in cleaned:
+                cleaned = cleaned.split(":")[-1]
+            parts = cleaned.split("/")
+            if len(parts) >= 2:
+                return f"{parts[-2]}/{parts[-1]}"
+    except Exception:
+        pass
+    return ""
+
+
+async def list_remote_sessions(cwd: str) -> dict[str, Any]:
+    """Scan jules remote sessions and merge with local session store."""
+    local_store = _load_session_store(cwd)
+    current_repo = _get_current_repo_name(cwd)
+
+    # Fetch active sessions from the remote CLI
+    code, stdout, stderr = await _run_command(
+        [JULES_BIN, "remote", "list", "--session"],
+        cwd=cwd,
+        timeout=120,
+    )
+    if code != 0:
+        # Fall back to local store only if remote list fails
+        return local_store
+
+    merged = dict(local_store)
+    for line in stdout.splitlines():
+        line_str = line.strip()
+        if not line_str or line_str.startswith("ID") or line_str.startswith("#") or line_str.startswith("╭") or line_str.startswith("│"):
+            continue
+        match = re.match(r"^(\d+)\s+(.*)$", line_str)
+        if not match:
+            continue
+        remote_id = match.group(1)
+        rest = match.group(2)
+
+        repo_match = re.search(
+            r"\b([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|unknown)\s+(\d+\w+(?:\s+\w+)?\s+ago|\d+\s+days\s+ago)\b",
+            rest,
+        )
+        if repo_match:
+            repo = repo_match.group(1)
+            last_active = repo_match.group(2)
+            desc_end = repo_match.start()
+            description = rest[:desc_end].strip()
+            status = rest[repo_match.end():].strip() or "running"
+        else:
+            repo = "unknown"
+            last_active = ""
+            description = rest.strip()
+            status = "running"
+
+        # Check if we should track this session (if local or belongs to this repo)
+        if remote_id in merged or (current_repo and repo.lower() == current_repo.lower()):
+            if remote_id not in merged:
+                merged[remote_id] = {
+                    "task_id": "remote-discovered",
+                    "project_id": "remote-discovered",
+                    "mission_id": "remote-discovered",
+                }
+            merged[remote_id].update({
+                "description": description,
+                "repo": repo,
+                "last_active": last_active,
+                "status": status,
+            })
+
+    return merged
+
+
 def _save_session_store(cwd: str, store: dict[str, Any]) -> None:
     path = _session_store_path(cwd)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -739,9 +823,15 @@ async def _run_prompt(prompt_text: str, cwd: str, *, transport: JsonRpcTransport
     if not prompt_text:
         raise BridgeError("empty session/prompt payload")
     await transport.notify_session_update(session_id, "Queued task for Jules remote execution.")
-    # CLI is the reliable path — REST endpoints differ by release and return 404
-    await transport.notify_session_update(session_id, "Using Jules CLI transport.")
-    state = await _run_jules_cli(prompt_text, cwd)
+    try:
+        await transport.notify_session_update(session_id, "Using Jules REST API transport.")
+        state = await _run_jules_rest(prompt_text, cwd)
+    except Exception as exc:
+        await transport.notify_session_update(
+            session_id,
+            f"REST API failed: {exc}. Falling back to Jules CLI transport.",
+        )
+        state = await _run_jules_cli(prompt_text, cwd)
 
     await transport.notify_session_update(
         session_id,

@@ -1189,10 +1189,13 @@ class ACPNodeRunner:
         )
 
         # Poll Jules until terminal state
-        from .jules_acp_bridge import STATUS_POLL_SECONDS
+        from .jules_acp_bridge import STATUS_POLL_SECONDS, _poll_jules_rest, _poll_jules_cli
         while not jules_state.is_terminal:
             await asyncio.sleep(STATUS_POLL_SECONDS)
-            jules_state = await _poll_jules_cli(jules_remote_id, workspace_dir)
+            try:
+                jules_state = await _poll_jules_rest(jules_remote_id, workspace_dir)
+            except Exception:
+                jules_state = await _poll_jules_cli(jules_remote_id, workspace_dir)
 
         # NOT GREEDY: Only promote NARS when both agents complete
         nars_promoted = promote_nars_to_jules_landscape(
