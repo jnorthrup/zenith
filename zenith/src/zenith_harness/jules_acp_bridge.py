@@ -7,6 +7,11 @@ return immediately — Jules is eventual delivery, not awaitable.
 
 The blocking ACP worker (poll loop, REST/CLI transports, JsonRpcTransport)
 lives in jules_acp_worker.py and is spawned as a subprocess.
+
+# TODO:
+# 1. Extract learned facts from completed mailbox transcripts for downstream tasks
+# 2. Inject mailbox conversation context into subsequent phase prompts
+# 3. Parse Jules session history for audit/knowledge retrieval
 """
 
 from __future__ import annotations
