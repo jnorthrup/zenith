@@ -105,16 +105,16 @@ def _phase_stale_zenith_artifacts(workspace: Path, selection: ProviderSelection)
     for provider in providers:
         if not provider.agent_output_dir:
             continue
-        agents_dir = (workspace / provider.agent_output_dir).resolve()
-        if agents_dir.exists():
+        agents_dir = workspace / provider.agent_output_dir
+        if agents_dir.exists() or agents_dir.is_symlink():
             targets.append(agents_dir)
         for rel in provider.skill_dirs:
-            sd = (workspace / rel).resolve()
-            if sd.exists():
+            sd = workspace / rel
+            if sd.exists() or sd.is_symlink():
                 targets.append(sd)
         if provider.orchestrator_prompt_output_path:
-            ppath = (workspace / provider.orchestrator_prompt_output_path).resolve()
-            if ppath.exists() and ppath.is_file():
+            ppath = workspace / provider.orchestrator_prompt_output_path
+            if ppath.exists() and ppath.is_file() or ppath.is_symlink():
                 targets.append(ppath)
     for p in targets:
         try:
@@ -173,7 +173,7 @@ def cli() -> None:
 @click.option(
     "--local/--no-local",
     "local",
-    default=False,
+    default=True,
     help="Store .zenith project data in the project workspace folder instead of the homedir.",
 )
 def init(
@@ -610,11 +610,15 @@ def _setup_provider_assets(
         click.echo(f"Installed bundled skills to {dest}")
     if provider.orchestrator_prompt_output_path:
         path = workspace / provider.orchestrator_prompt_output_path
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            body = loader.load_prompt_file("orchestrator", "system_prompt.md")
-            path.write_text(body, encoding="utf-8")
-            click.echo(f"Created {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source = loader.config.bundled_dir / "prompts" / "orchestrator" / "system_prompt.md"
+        if use_symlinks and source.exists():
+            if not (path.is_symlink() and path.resolve() == source.resolve()):
+                _atomic_symlink(source.resolve(), path)
+        else:
+            if not path.exists():
+                body = loader.load_prompt_file("orchestrator", "system_prompt.md")
+                path.write_text(body, encoding="utf-8")
 
 
 def _copy_provider_agents(loader: AssetLoader, target: Path, provider_name: str, *, use_symlinks: bool = True) -> None:
