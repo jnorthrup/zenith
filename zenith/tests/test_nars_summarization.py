@@ -49,16 +49,14 @@ def test_nars_summarization_head_n10(tmp_path: Path):
     lines = proc.stdout.splitlines()
     assert len(lines) == 10, f"Expected exactly 10 lines, got {len(lines)}"
 
-    # Line 1: {"id":"mission-xyz","nars":["<A --> B>",
+    # Line 1: {"id":"mission-xyz","nars":["<A --> B>","<C --> D>","<E --> F>"]
     assert lines[0].startswith('{"id":"mission-xyz","nars":[')
     assert '"<A --> B>"' in lines[0]
+    assert '"<C --> D>"' in lines[0]
+    assert '"<E --> F>"' in lines[0]
 
-    # Lines 2-3: Subsequent NARS terms (with indent and quotes)
-    assert '"<C --> D>"' in lines[1]
-    assert '"<E --> F>"' in lines[2]
-
-    # Lines 4-10: Should be empty strings (padding to line 10)
-    for i in range(3, 10):
+    # Lines 2-10: Should be empty strings (padding to line 10)
+    for i in range(1, 10):
         assert lines[i] == ""
 
     # 6. Read the whole file and verify it's valid JSON

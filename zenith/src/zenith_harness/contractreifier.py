@@ -98,11 +98,11 @@ def _pack_nars_into_lines(nars: list[str]) -> list[str]:
 
 
 def _render_contract_lines(json_bytes: bytes, nars: list[str]) -> list[str]:
-    """Helper to render augmented JSON lines with NARS starting on Line 1.
+    """Helper to render augmented JSON lines with NARS packed densely.
     
     Ensures that:
-    - Line 1 contains both {"id":"...","nars":[ and the first NARS term.
-    - Subsequent NARS terms are on Line 2, Line 3, etc.
+    - Line 1 contains both {"id":"...","nars":[ and as many NARS terms as fit.
+    - Lines 2 to 10 are filled with subsequent NARS terms, packed up to 280 chars/line.
     - Exact padding to 10 lines is maintained.
     - Line 11+ contains the closing bracket and remaining JSON properties.
     """
@@ -115,31 +115,50 @@ def _render_contract_lines(json_bytes: bytes, nars: list[str]) -> list[str]:
     id_json = json.dumps(id_value, ensure_ascii=False)
 
     lines: list[str] = []
+    nars_index = 0
+    line_limit = 10
 
-    if nars:
-        first_term = json.dumps(nars[0], ensure_ascii=False)
-        has_more_nars = len(nars) > 1
-        if has_more_nars:
-            line1 = f'{{"{id_key}":{id_json},"nars":[{first_term},'
-        else:
-            line1 = f'{{"{id_key}":{id_json},"nars":[{first_term}'
+    # Pack Line 1
+    current_line = f'{{"{id_key}":{id_json},"nars":['
+    while nars_index < len(nars):
+        term_json = json.dumps(nars[nars_index], ensure_ascii=False)
+        is_first_on_line = (current_line == f'{{"{id_key}":{id_json},"nars":[')
+        separator = "" if is_first_on_line else ","
         
-        if len(line1) > MAX_LINE_WIDTH:
-            line1 = _cap(line1)
-        lines.append(line1)
+        if len(current_line) + len(separator) + len(term_json) <= MAX_LINE_WIDTH:
+            current_line += separator + term_json
+            nars_index += 1
+        else:
+            if is_first_on_line:
+                # Force the first term if it's too long
+                current_line += term_json
+                nars_index += 1
+            break
 
-        for i in range(1, len(nars)):
-            term = json.dumps(nars[i], ensure_ascii=False)
-            has_more = i < len(nars) - 1
-            line = f'  {term},' if has_more else f'  {term}'
-            if len(line) > MAX_LINE_WIDTH:
-                line = _cap(line)
-            lines.append(line)
-    else:
-        line1 = f'{{"{id_key}":{id_json},"nars":['
-        if len(line1) > MAX_LINE_WIDTH:
-            line1 = _cap(line1)
-        lines.append(line1)
+    if nars_index < len(nars) and line_limit > 1:
+        current_line += ","
+    lines.append(current_line)
+
+    # Pack Lines 2 to 10
+    while nars_index < len(nars) and len(lines) < line_limit:
+        current_line = "  "
+        while nars_index < len(nars):
+            term_json = json.dumps(nars[nars_index], ensure_ascii=False)
+            is_first_on_line = (current_line == "  ")
+            separator = "" if is_first_on_line else ","
+            
+            if len(current_line) + len(separator) + len(term_json) <= MAX_LINE_WIDTH:
+                current_line += separator + term_json
+                nars_index += 1
+            else:
+                if is_first_on_line:
+                    current_line += term_json
+                    nars_index += 1
+                break
+                
+        if nars_index < len(nars) and len(lines) < line_limit - 1:
+            current_line += ","
+        lines.append(current_line)
 
     while len(lines) < 10:
         lines.append("")
