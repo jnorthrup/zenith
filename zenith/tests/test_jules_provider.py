@@ -71,7 +71,7 @@ def test_bridge_retries_transient_cli_error() -> None:
     if hasattr(bridge._poll_jules_cli, "_transient_count"):
         del bridge._poll_jules_cli._transient_count  # type: ignore[attr-defined]
 
-    with patch.object(bridge, "_run_command", side_effect=fake_run_command), \
+    with patch.object(bridge, "run_command", side_effect=fake_run_command), \
          patch.object(bridge, "TRANSIENT_BACKOFF_S", 0.0):
         state = asyncio.run(bridge._poll_jules_cli("abc123", "/tmp"))
 

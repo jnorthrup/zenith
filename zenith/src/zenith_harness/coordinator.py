@@ -252,6 +252,8 @@ class MissionCoordinator:
                 task_state.status_of(dep) == "cleared" for dep in task.depends_on
             ):
                 runnable.append(task)
+        # Prioritize tasks with priority_respawn=True (failed cannot_proceed retries)
+        runnable.sort(key=lambda t: not task_state.priority_respawn_of(t.id))
         return runnable
 
     def _is_jules_task(self, task: Task) -> bool:

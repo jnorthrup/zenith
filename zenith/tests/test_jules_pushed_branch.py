@@ -45,7 +45,7 @@ def test_real_pushed_branch_is_honest() -> None:
     """The 7395... session is the only one that ever pushed a branch on
     this repo. The bridge's git-ls-remote probe MUST find it.
     """
-    from zenith_harness.jules_acp_bridge import _try_find_pushed_branch
+    from zenith_harness.jules_acp_bridge import try_find_pushed_branch
 
     cwd = "/Users/jim/work/zTrike"
     # Independent probe — must agree
@@ -54,7 +54,7 @@ def test_real_pushed_branch_is_honest() -> None:
         "test fixture is stale"
     )
 
-    branch = asyncio.run(_try_find_pushed_branch(REAL_BRANCH_SESSION, cwd))
+    branch = asyncio.run(try_find_pushed_branch(REAL_BRANCH_SESSION, cwd))
     assert branch is not None, "Bridge must find the pushed branch"
     assert branch.startswith(f"refs/heads/jules-{REAL_BRANCH_SESSION}-"), (
         f"Unexpected branch ref: {branch!r}"
