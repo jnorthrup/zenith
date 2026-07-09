@@ -97,46 +97,68 @@ def _pack_nars_into_lines(nars: list[str]) -> list[str]:
     return lines[:2]
 
 
-def _inject_nars(json_bytes: bytes, nars: list[str]) -> str:
-    """Inject nars array after the first field (id) in JSON.
-
-    Format for head -n10 scanning:
-      L1: {"id":"...","nars":[
-      L2-3: "NAR_1","NAR_2", (valid JSON strings, but array left open)
-      L4-10: (blank - for scannable summary)
-      L11+: ],"title":"..."} (continuation that closes array)
+def _render_contract_lines(json_bytes: bytes, nars: list[str]) -> list[str]:
+    """Helper to render augmented JSON lines with NARS starting on Line 1.
     
-    The 10-line prefix is NOT valid JSON alone. Full JSON requires line 11+.
+    Ensures that:
+    - Line 1 contains both {"id":"...","nars":[ and the first NARS term.
+    - Subsequent NARS terms are on Line 2, Line 3, etc.
+    - Exact padding to 10 lines is maintained.
+    - Line 11+ contains the closing bracket and remaining JSON properties.
     """
     data = json.loads(json_bytes)
     items = list(data.items())
     if not items:
-        return ""
+        return [json.dumps(data, ensure_ascii=False)]
 
     id_key, id_value = items[0]
-    rest_items = items[1:]
-
-    # Pack NARS into lines 2-3 (first half line 2, second half line 3)
-    nars_packed = _pack_nars_into_lines(nars)
-
     id_json = json.dumps(id_value, ensure_ascii=False)
-    line1 = f'{{"{id_key}":{id_json},"nars":['
-    if len(line1) > MAX_LINE_WIDTH:
-        line1 = _cap(line1)
 
-    out_lines = [line1]
+    lines: list[str] = []
 
-    # Lines 2-3: NARS terms (JSON strings, array still open)
-    for nline in nars_packed:
-        if len(out_lines) >= 3:  # Stop after line 3
-            break
-        out_lines.append(nline)
+    if nars:
+        first_term = json.dumps(nars[0], ensure_ascii=False)
+        has_more_nars = len(nars) > 1
+        if has_more_nars:
+            line1 = f'{{"{id_key}":{id_json},"nars":[{first_term},'
+        else:
+            line1 = f'{{"{id_key}":{id_json},"nars":[{first_term}'
+        
+        if len(line1) > MAX_LINE_WIDTH:
+            line1 = _cap(line1)
+        lines.append(line1)
 
-    # Lines 4-10: blank (scannable summary)
-    while len(out_lines) < 10:
-        out_lines.append("")
+        for i in range(1, len(nars)):
+            term = json.dumps(nars[i], ensure_ascii=False)
+            has_more = i < len(nars) - 1
+            line = f'  {term},' if has_more else f'  {term}'
+            if len(line) > MAX_LINE_WIDTH:
+                line = _cap(line)
+            lines.append(line)
+    else:
+        line1 = f'{{"{id_key}":{id_json},"nars":['
+        if len(line1) > MAX_LINE_WIDTH:
+            line1 = _cap(line1)
+        lines.append(line1)
 
-    return "\n".join(out_lines[:10])
+    while len(lines) < 10:
+        lines.append("")
+
+    rest_items = items[1:]
+    if rest_items:
+        rest_dict = dict(rest_items)
+        rest_json = json.dumps(rest_dict, ensure_ascii=False, separators=(',', ':'))
+        lines.append(f'],{rest_json[1:]}')
+    else:
+        lines.append(']}')
+
+    return lines
+
+
+def _inject_nars(json_bytes: bytes, nars: list[str]) -> str:
+    """Inject nars array after the first field (id) in JSON for head -n10."""
+    lines = _render_contract_lines(json_bytes, nars)
+    return "\n".join(lines[:10])
 
 
 def render_contract_head(json_path: Path, nars: list[str]) -> str:
@@ -156,77 +178,20 @@ def render_contract_head(json_path: Path, nars: list[str]) -> str:
 def render_full_with_contract(json_path: Path, nars: list[str]) -> str:
     """Render full JSON with nars contract injected, formatted for head -n10.
     
-    Output format:
-      Line 1: {"id":"...","nars":[
-      Lines 2-10: NARS terms (spread across, comma-separated)
-      Line 11+: ],"title":"...",...}
-    
     This is valid JSON when read as a whole. head -n10 shows scannable summary.
     """
     json_bytes = json_path.read_bytes()
-    data = json.loads(json_bytes)
-    
-    items = list(data.items())
-    if not items:
-        return json.dumps(data, ensure_ascii=False)
-    
-    # Build output with newlines between elements
-    lines: list[str] = []
-    
-    # Line 1: id + nars array open
-    id_key, id_value = items[0]
-    id_json = json.dumps(id_value, ensure_ascii=False)
-    lines.append(f'{{"{id_key}":{id_json},"nars":[')
-    
-    # Lines 2-10: NARS terms (spread across, comma-separated)
-    for i, nars_term in enumerate(nars):
-        nars_json = json.dumps(nars_term, ensure_ascii=False)
-        # Add comma if not last
-        if i < len(nars) - 1:
-            lines.append(f'  {nars_json},')
-        else:
-            lines.append(f'  {nars_json}')
-    
-    # Pad lines 4-10 if needed
-    while len(lines) < 10:
-        lines.append("")
-    
-    # Line 11+: close nars + rest of fields
-    rest_items = items[1:]
-    if rest_items:
-        rest_dict = dict(rest_items)
-        rest_json = json.dumps(rest_dict, ensure_ascii=False, separators=(',', ':'))
-        # Remove outer braces, add as continuation
-        lines.append(f'],{rest_json[1:]}')
-    else:
-        lines.append(']}')
-    
+    lines = _render_contract_lines(json_bytes, nars)
     return "\n".join(lines)
 
 
 def render_contract_continuation(json_path: Path, nars: list[str]) -> str:
-    """Render JSON continuation starting from line 11.
-    
-    Lines 1-10 format: {"id":"...","nars":[
-    Line 11+ format: ],"title":"...","version":"..."} (close nars, add rest fields)
-    """
+    """Render JSON continuation starting from line 11."""
     json_bytes = json_path.read_bytes()
-    data = json.loads(json_bytes)
-    
-    items = list(data.items())
-    if not items:
-        return ""
-    
-    # Skip id (already in line 1), get rest
-    rest_items = items[1:]
-    rest_dict = dict(rest_items)
-    
-    if rest_dict:
-        rest_json = json.dumps(rest_dict, ensure_ascii=False, separators=(',', ':'))
-        # Return: close nars + rest (no id, it's in line 1)
-        return f'],{rest_json[1:]}'  # remove leading {
-    else:
-        return ']}'  # close nars and object
+    lines = _render_contract_lines(json_bytes, nars)
+    if len(lines) >= 11:
+        return "\n".join(lines[10:])
+    return ""
 
 
 __all__ = [
