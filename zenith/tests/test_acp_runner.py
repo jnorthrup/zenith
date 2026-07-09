@@ -227,3 +227,38 @@ def test_handle_fs_read_whitespace_squeezing(tmp_path: Path):
     res = client._handle_fs_read({"path": str(yaml_file)})
     assert res["content"] == "key:\n  - value1\n\n\n  - value2"
 
+
+def test_handle_fs_write_nars_formatting(tmp_path: Path):
+    client = ACPClient(
+        process=None,  # type: ignore[arg-type]
+        working_dir=str(tmp_path),
+    )
+
+    test_json_file = tmp_path / "assertions" / "test.json"
+
+    test_content = json.dumps({
+        "id": "test",
+        "title": "Assertion Title",
+        "description": "Assertion Description",
+        "nars": ["(test-nars-relation)"]
+    })
+
+    client._handle_fs_write({
+        "path": str(test_json_file),
+        "content": test_content,
+    })
+
+    # Read it back and verify it was NARS formatted
+    formatted_content = test_json_file.read_text(encoding="utf-8")
+    assert '"nars":' in formatted_content
+
+    # The JSON should be fully valid and loadable
+    data = json.loads(formatted_content)
+    assert data["nars"] == ["(test-nars-relation)"]
+
+    # Verify that NARS formatting put nars in lines 1-10
+    lines = formatted_content.splitlines()
+    assert len(lines) >= 3
+    assert any("nars" in line for line in lines[:10])
+
+

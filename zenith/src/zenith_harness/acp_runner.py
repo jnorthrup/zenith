@@ -468,7 +468,20 @@ class ACPClient:
         if not path.is_absolute():
             path = Path(self._working_dir) / path
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(params["content"], encoding="utf-8")
+        content = params["content"]
+        path.write_text(content, encoding="utf-8")
+
+        # If it is a JSON file containing a "nars" list, apply NARS 10-line formatting
+        if path.suffix.lower() == ".json":
+            try:
+                import json
+                data = json.loads(content)
+                if isinstance(data, dict) and "nars" in data and isinstance(data["nars"], list):
+                    from .contractreifier import render_full_with_contract
+                    formatted = render_full_with_contract(path, data["nars"])
+                    path.write_text(formatted, encoding="utf-8")
+            except Exception:
+                pass
         return {}
 
     async def _handle_terminal_create(self, params: dict[str, Any]) -> dict[str, str]:
