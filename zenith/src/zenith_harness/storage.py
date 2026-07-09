@@ -14,11 +14,11 @@ directory, Zenith preserves it and copies missing bucket skills into it.
 See `specs/memory_v2/PRODUCT.md` and `specs/task_list/PRODUCT.md`.
 """
 from __future__ import annotations
-
 import json
 import os
 import re
 import shutil
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1147,6 +1147,39 @@ class ProjectStore:
                 dest.mkdir(parents=True, exist_ok=True)
             elif src.is_file():
                 dest.symlink_to(src.resolve())
+
+    # ------------------------------------------------------------------
+    # Jules quota tracking (24h rolling window)
+    # ------------------------------------------------------------------
+
+    def _jules_dispatch_log_path(self, project_id: str) -> Path:
+        return self.zenith_runtime_dir(project_id) / "jules_dispatch_log.json"
+
+    def record_jules_dispatch(self, project_id: str) -> None:
+        """Record a Jules dispatch timestamp for quota tracking."""
+        log_path = self._jules_dispatch_log_path(project_id)
+        try:
+            if log_path.exists():
+                dispatches = json.loads(log_path.read_text(encoding="utf-8"))
+            else:
+                dispatches = []
+            dispatches.append(time.time())  # Unix timestamp
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(log_path, dispatches)
+        except Exception:
+            pass  # Non-fatal - quota is advisory
+
+    def jules_dispatches_in_last_24h(self, project_id: str) -> int:
+        """Count Jules dispatches in the last 24 hours (rolling window)."""
+        log_path = self._jules_dispatch_log_path(project_id)
+        if not log_path.exists():
+            return 0
+        try:
+            dispatches = json.loads(log_path.read_text(encoding="utf-8"))
+            cutoff = time.time() - 24 * 3600
+            return sum(1 for ts in dispatches if ts > cutoff)
+        except Exception:
+            return 0
 
 
 __all__ = [

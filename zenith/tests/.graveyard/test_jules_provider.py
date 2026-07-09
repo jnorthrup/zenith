@@ -51,7 +51,7 @@ def test_jules_default_acp_command_matches_entrypoint() -> None:
 
 def test_bridge_retries_transient_cli_error() -> None:
     """Bridge should retry up to MAX_TRANSIENT_RETRIES on transient non-zero CLI exit."""
-    import zenith_harness.jules_acp_bridge as bridge
+    import zenith_harness.jules_acp_worker as bridge
 
     call_count = 0
 

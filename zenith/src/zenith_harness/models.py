@@ -29,7 +29,7 @@ SKILL_NAME_REGEX = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
 TaskType = Literal["work", "validate", "gate"]
-TaskStatus = Literal["pending", "running", "cleared", "failed", "superseded"]
+TaskStatus = Literal["pending", "running", "cleared", "failed", "superseded", "waiting"]
 AssertionStatus = Literal["pending", "passed", "failed"]
 
 # ---------------------------------------------------------------------------
@@ -303,11 +303,48 @@ class Envelope(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class MailEnvelope(BaseModel):
+    """One piece of mail within a mission's mailbox.
+
+    Mail is per-mission (keyed by ``slug`` = mission id). A mailbox file
+    is the JSONL of envelopes for a single mission; the first envelope
+    is the contract header rendered by ``contractreifier`` for
+    ``head -n10`` scanning. Subsequent envelopes are events.
+
+    ``from_party`` and ``to_party`` identify the parties on the
+    contract: a ``remote_id`` (Jules), or ``"orchestrator"`` (the LLM
+    main loop). The slug is the filename, NOT a party — it is the
+    mission's contract identifier.
+
+    ``nars`` is the load-bearing scope discipline: every envelope MUST
+    carry at least one NARS term from the mission contract. ``body`` is
+    optional prose, capped at 200 chars. The orchestrator LLM uses
+    ``nars`` to bound context — a picking-up agent reads only the
+    latest N envelopes, but always the contract NARS at the top.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_party: str
+    to_party: str
+    kind: Literal["open", "round", "consensus", "status"] = "round"
+    nars: list[str] = Field(default_factory=list)
+    body: str = ""
+    unix_ts: float
+    pending: bool = True
+
+
 class WorkHandoff(BaseModel):
     """Written by work tasks via `end_node`.
 
     Field `node_id` is retained as the on-disk attempt filename token —
     interpreted as task id. Rename deferred.
+
+    `pending_mail` is non-empty for bijective dispatches (Jules): the
+    task is not `done`; it has been launched and the orchestrator is
+    holding outbound mail to be batched into the next main-loop turn.
+    Coordinator treats `done=False` + `pending_mail` as "waiting on
+    mailbox," not as failure.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -316,6 +353,7 @@ class WorkHandoff(BaseModel):
     done: bool
     report: str
     request_attention: bool = False
+    pending_mail: list[MailEnvelope] = Field(default_factory=list)
 
 
 class ValidationItem(BaseModel):
@@ -358,6 +396,7 @@ class TaskStateEntry(BaseModel):
     status: TaskStatus = "pending"
     last_attempt: str | None = None  # spawn_ts of most recent dispatch
     priority_respawn: bool = False
+    remote_id: str | None = None  # Jules remote session ID for bijective tasks
 
     # Coalesced attempt counters — avoid list_attempts() + parse for decisions.
     attempt_count: int = 0

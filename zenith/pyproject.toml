@@ -54,7 +54,7 @@ zenith_harness = ["bundled/**/*", "py.typed"]
 [project.scripts]
 zenith = "zenith_harness.cli:cli"
 zenith-server = "zenith_harness.server:main"
-jules-acp-bridge = "zenith_harness.jules_acp_bridge:main"
+jules-acp-bridge = "zenith_harness.jules_acp_worker:main"
 
 [dependency-groups]
 dev = [

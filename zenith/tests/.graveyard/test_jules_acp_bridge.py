@@ -70,7 +70,7 @@ def _launch_bridge(tmp_path: Path, *, terminal_status: str) -> tuple[subprocess.
         }
     )
     process = subprocess.Popen(
-        [sys.executable, "-m", "zenith_harness.jules_acp_bridge"],
+        [sys.executable, "-m", "zenith_harness.jules_acp_worker"],
         cwd=tmp_path,
         env=env,
         stdin=subprocess.PIPE,
@@ -145,7 +145,7 @@ def _run_prompt(process: subprocess.Popen[str], tmp_path: Path) -> tuple[list[di
 
 def test_jules_bridge_check_mode(tmp_path: Path):
     proc = subprocess.run(
-        [sys.executable, "-m", "zenith_harness.jules_acp_bridge", "--check"],
+        [sys.executable, "-m", "zenith_harness.jules_acp_worker", "--check"],
         cwd=tmp_path,
         capture_output=True,
         text=True,

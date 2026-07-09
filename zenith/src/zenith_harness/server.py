@@ -25,10 +25,20 @@ from .models import (
     ValidationItem,
     WorkHandoff,
 )
-from .jules_acp_bridge import JulesACPBridge
-from .storage import atomic_write_json
+from .jules_acp_bridge import atomic_write_json
 
 logger = logging.getLogger(__name__)
+
+# Voting/consensus tuning. Per project policy: S/N ratio 3 or 5 for voting,
+# 4 is optimal for non-voting consensus. Cap any fan-out batch at 5 so a
+# tie never deadlocks a vote (5→majority 3, 3→unanimous). Recency gate:
+# a Jules session is eligible for cross-session interaction only if it has
+# reached terminal state AND delivered (PR or branch). Quota window bounds
+# how long an already-closed session remains "recent" for the orchestrator
+# to cite or vote against.
+JULES_VOTING_MAX_FANOUT = int(os.environ.get("JULES_VOTING_MAX_FANOUT", "5"))
+JULES_VOTING_OPTIMAL = int(os.environ.get("JULES_VOTING_OPTIMAL", "4"))
+JULES_RECENCY_HOURS = float(os.environ.get("JULES_RECENCY_HOURS", "24"))
 
 
 # ---------------------------------------------------------------------------
@@ -56,9 +66,11 @@ def create_orchestrator_server(
         name="zenith",
         instructions=(
             "Mission orchestration harness. Mode: orchestrator. "
-            "9 tools: start_project, submit_plan, advance_project, "
+            "14 tools: start_project, submit_plan, advance_project, "
             "end_mission, decide_attention, inspect_project, abort_project, "
-            "jules_converse, jules_bijective_sync. "
+            "jules_ensure_auth, jules_launch_task, jules_dispatch_batch, "
+            "jules_poll_batch, jules_converse, jules_bijective_sync, "
+            "jules_list_sessions. "
             "Lifecycle: plan with submit_plan, run with advance_project, "
             "request closure with end_mission, resolve attention with decide_attention, "
             "then call advance_project again."
@@ -408,11 +420,262 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
             return {"error": "jules_auth_failed", "message": str(exc)}
 
     @mcp.tool(
+        name="jules_launch_task",
+        description=(
+            "Create a Jules remote session for a Zenith task and return immediately. "
+            "Zenith owns the in-repo mailbox under .zenith/mailbox, so Hermes does not "
+            "have to hold a long-running Jules conversation. Circle back with "
+            "jules_bijective_sync and jules_converse."
+        ),
+    )
+    async def jules_launch_task(
+        project_id: Annotated[str, Field(description="Project id.")],
+        prompt: Annotated[str, Field(description="Imperative Jules task prompt. Must ask for a PR or branch-producing change.")],
+        task_id: Annotated[str | None, Field(description="Optional Zenith task id to bind to the Jules session.")] = None,
+        mission_id: Annotated[str | None, Field(description="Optional Zenith mission id; defaults to current mission when running.")] = None,
+    ) -> dict[str, Any]:
+        try:
+            cwd = str(controller.store.workspace_dir(project_id))
+            if mission_id is None:
+                from .models import MissionRunning
+                proj_state = controller.store.load_state(project_id)
+                mission_id = proj_state.mission_id if isinstance(proj_state, MissionRunning) else "mcp"
+            if task_id is None:
+                import time
+                task_id = f"jules-{int(time.time())}"
+            from .jules_acp_bridge import launch_jules_bijective, load_session_store
+            remote_id, state = await launch_jules_bijective(
+                prompt_text=prompt,
+                cwd=cwd,
+                task_id=task_id,
+                project_id=project_id,
+                mission_id=mission_id,
+            )
+            session = load_session_store(cwd).get(remote_id, {})
+            # Get live quota metrics
+            from .jules_acp_bridge import check_jules_quota
+            import asyncio
+            loop = asyncio.new_event_loop()
+            try:
+                active, headroom = loop.run_until_complete(check_jules_quota(cwd))
+            except Exception:
+                active, headroom = 0, 4
+            finally:
+                loop.close()
+            # Get rolling 24h quota
+            daily_quota = controller.store.config.jules_quota_per_24h
+            dispatches_24h = controller.store.jules_dispatches_in_last_24h(project_id)
+            return {
+                "remote_id": remote_id,
+                "task_id": task_id,
+                "mission_id": mission_id,
+                "status": state.status,
+                "is_terminal": state.is_terminal,
+                "succeeded": state.succeeded,
+                "mailbox_path": session.get("mailbox_path"),
+                "repo_root": session.get("repo_root"),
+                "quota": {
+                    "active_sessions": active,
+                    "concurrency_headroom": headroom,
+                    "dispatches_last_24h": dispatches_24h,
+                    "rolling_headroom": max(0, daily_quota - dispatches_24h),
+                    "daily_quota": daily_quota,
+                },
+                "note": "Non-blocking launch: Zenith mailbox owns the Jules conversation; circle back via jules_bijective_sync.",
+            }
+        except Exception as exc:
+            return {"error": "jules_launch_task_failed", "message": str(exc)}
+
+    @mcp.tool(
+        name="jules_dispatch_batch",
+        description=(
+            "Dispatch a batch of Jules sessions in one SMTP-analog turn. "
+            "Same primitive as jules_launch_task, gathered in parallel via asyncio.gather. "
+            "Returns one record per task_id in input order. Each record carries its own "
+            "remote_id on success or an error message on failure."
+        ),
+    )
+    async def jules_dispatch_batch(
+        project_id: Annotated[str, Field(description="Project id.")],
+        items: Annotated[
+            list[dict[str, Any]],
+            Field(description="List of {task_id, prompt} dicts. task_id optional; auto-generated when missing."),
+        ],
+    ) -> dict[str, Any]:
+        try:
+            cwd = str(controller.store.workspace_dir(project_id))
+            from .models import MissionRunning
+            from .jules_acp_bridge import launch_jules_bijective, load_session_store
+
+            proj_state = controller.store.load_state(project_id)
+            default_mission_id = proj_state.mission_id if isinstance(proj_state, MissionRunning) else "mcp"
+            import time as _time
+
+            async def _one(item: dict[str, Any]) -> dict[str, Any]:
+                task_id = item.get("task_id") or f"jules-{int(_time.time() * 1000)}-{id(item)}"
+                prompt = item.get("prompt", "")
+                mission_id = item.get("mission_id", default_mission_id)
+                try:
+                    remote_id, state = await launch_jules_bijective(
+                        prompt_text=prompt,
+                        cwd=cwd,
+                        task_id=task_id,
+                        project_id=project_id,
+                        mission_id=mission_id,
+                    )
+                    session = load_session_store(cwd).get(remote_id, {})
+                    return {
+                        "task_id": task_id,
+                        "remote_id": remote_id,
+                        "mission_id": mission_id,
+                        "status": state.status,
+                        "is_terminal": state.is_terminal,
+                        "mailbox_path": session.get("mailbox_path"),
+                    }
+                except Exception as exc:
+                    return {"task_id": task_id, "error": str(exc)}
+
+            results = await asyncio.gather(*(_one(it) for it in items))
+            warning = None
+            if len(items) > JULES_VOTING_MAX_FANOUT:
+                warning = (
+                    f"Batch size {len(items)} exceeds voting cap "
+                    f"JULES_VOTING_MAX_FANOUT={JULES_VOTING_MAX_FANOUT}. "
+                    f"Consider 3 or 5 for voting, {JULES_VOTING_OPTIMAL} for non-voting consensus."
+                )
+                logger.warning(warning)
+
+            # Get live quota metrics
+            from .jules_acp_bridge import check_jules_quota
+            try:
+                active, headroom = await check_jules_quota(cwd)
+            except Exception:
+                active, headroom = 0, 4
+            # Get rolling 24h quota
+            daily_quota = controller.store.config.jules_quota_per_24h
+            dispatches_24h = controller.store.jules_dispatches_in_last_24h(project_id)
+
+            payload: dict[str, Any] = {
+                "results": results,
+                "count": len(results),
+                "quota": {
+                    "active_sessions": active,
+                    "concurrency_headroom": headroom,
+                    "dispatches_last_24h": dispatches_24h,
+                    "rolling_headroom": max(0, daily_quota - dispatches_24h),
+                    "daily_quota": daily_quota,
+                },
+            }
+            if warning:
+                payload["warning"] = warning
+            return payload
+        except Exception as exc:
+            return {"error": "jules_dispatch_batch_failed", "message": str(exc)}
+
+    @mcp.tool(
+        name="jules_poll_batch",
+        description=(
+            "Single-shot batch poll of N Jules sessions. Read-side counterpart to "
+            "jules_dispatch_batch: returns one record per remote_id in input order, "
+            "each carrying status, succeeded, pr_url, pushed_branch, mailbox_path. "
+            "Non-blocking — one status check per session, no poll loops. "
+            "Use this for cross-Jules consensus / voting: fan out via jules_dispatch_batch, "
+            "collect verdicts via jules_poll_batch."
+        ),
+    )
+    async def jules_poll_batch(
+        project_id: Annotated[str, Field(description="Project id.")],
+        remote_ids: Annotated[
+            list[str],
+            Field(description="List of Jules remote session ids to poll."),
+        ],
+    ) -> dict[str, Any]:
+        try:
+            cwd = str(controller.store.workspace_dir(project_id))
+            from .jules_acp_bridge import check_jules_status, load_session_store
+
+            store = load_session_store(cwd)
+
+            async def _one(remote_id: str) -> dict[str, Any]:
+                try:
+                    state = await check_jules_status(remote_id, cwd)
+                    session = store.get(remote_id, {})
+                    return {
+                        "remote_id": remote_id,
+                        "status": state.status,
+                        "is_terminal": state.is_terminal,
+                        "succeeded": state.succeeded,
+                        "pr_url": state.pr_url,
+                        "pushed_branch": state.pushed_branch,
+                        "mailbox_path": session.get("mailbox_path"),
+                    }
+                except Exception as exc:
+                    return {"remote_id": remote_id, "error": str(exc)}
+
+            results = await asyncio.gather(*(_one(rid) for rid in remote_ids))
+
+            # Recency gate: a session is "ready_for_interaction" only if it
+            # has reached terminal state AND delivered (PR or branch). The
+            # eligible set is sorted by completion time, newest first, with
+            # sessions older than JULES_RECENCY_HOURS excluded from the
+            # "ready" count even if they passed the recency gate.
+            import time as _time
+            now = _time.time()
+            recency_cutoff = now - (JULES_RECENCY_HOURS * 3600)
+            for r in results:
+                if "error" in r:
+                    r["ready_for_interaction"] = False
+                    r["recency_status"] = "error"
+                    continue
+                ready = bool(r.get("is_terminal")) and bool(r.get("succeeded"))
+                session = store.get(r.get("remote_id", ""), {})
+                completed_at = session.get("updated_at") or session.get("created_at") or 0
+                in_window = completed_at >= recency_cutoff
+                r["ready_for_interaction"] = ready and in_window
+                if not ready:
+                    r["recency_status"] = "not_terminal_or_undelivered"
+                elif not in_window:
+                    r["recency_status"] = "expired"
+                else:
+                    r["recency_status"] = "ready"
+                r["completed_at"] = completed_at
+
+            # Rank eligible sessions newest-first by completion time.
+            eligible = sorted(
+                (r for r in results if r.get("ready_for_interaction")),
+                key=lambda r: r.get("completed_at", 0),
+                reverse=True,
+            )
+            ready_count = sum(1 for r in results if r.get("ready_for_interaction"))
+
+            warning = None
+            if len(remote_ids) > JULES_VOTING_MAX_FANOUT:
+                warning = (
+                    f"Batch size {len(remote_ids)} exceeds voting cap "
+                    f"JULES_VOTING_MAX_FANOUT={JULES_VOTING_MAX_FANOUT}. "
+                    f"Consider 3 or 5 for voting, {JULES_VOTING_OPTIMAL} for non-voting consensus."
+                )
+                logger.warning(warning)
+
+            payload: dict[str, Any] = {
+                "results": results,
+                "count": len(results),
+                "ready_count": ready_count,
+                "ready_ranked": [r["remote_id"] for r in eligible],
+            }
+            if warning:
+                payload["warning"] = warning
+            return payload
+        except Exception as exc:
+            return {"error": "jules_poll_batch_failed", "message": str(exc)}
+
+    @mcp.tool(
         name="jules_converse",
         description=(
             "Send a follow-up message to an existing Jules remote session. "
-            "Bijective sync: forwards message to Jules REST API, polls for terminal state, "
-            "returns updated PR URL. Use for latent goal telegraphing at mating points."
+            "Non-blocking: forwards message to Jules REST API and returns immediately. "
+            "Jules chats but can't be waited on — circle back later via jules_bijective_sync. "
+            "Use for latent goal telegraphing at mating points."
         ),
     )
     async def jules_converse(
@@ -422,14 +685,19 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
     ) -> dict[str, Any]:
         try:
             cwd = str(controller.store.workspace_dir(project_id))
-            from .jules_acp_bridge import _send_jules_message, _poll_jules_rest
-            await _send_jules_message(remote_id, message, cwd)
-            state = await _poll_jules_rest(remote_id, cwd)
+            from .jules_acp_bridge import send_jules_message, check_jules_status, load_session_store
+            await send_jules_message(remote_id, message, cwd)
+            # Non-blocking: single status check, no poll loop
+            state = await check_jules_status(remote_id, cwd)
+            session = load_session_store(cwd).get(remote_id, {})
             return {
                 "remote_id": remote_id,
+                "sent": True,
                 "status": state.status,
                 "pr_url": state.pr_url,
                 "succeeded": state.succeeded,
+                "mailbox_path": session.get("mailbox_path"),
+                "note": "Non-blocking — Jules chats but can't be waited on. Circle back via jules_bijective_sync.",
             }
         except Exception as exc:
             return {
@@ -441,8 +709,11 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
         name="jules_bijective_sync",
         description=(
             "Bijective sync between Jules remote state and Zenith mission state. "
-            "Maps Jules running/queued ↔ Zenith mission_running; Jules completed → Zenith decide_attention with PR; "
-            "Jules failed → Zenith decide_attention with action=patch for debt mitigation. "
+            "Maps Jules running/queued ↔ Zenith mission_running; "
+            "Jules awaiting_user_feedback ↔ Zenith attention_needed with needs_orchestrator_answer=True "
+            "(the orchestrator should call jules_converse with an answer or let the time window expire); "
+            "Jules completed-with-PR → Zenith decide_attention with PR merge route; "
+            "Jules failed OR completed-without-PR → Zenith decide_attention with action=patch for debt mitigation. "
             "Tracks mating contracts at opposite timeline ends for intercourse support. "
             "NOT GREEDY: NARS promotion to Jules landscape only triggers on terminal state."
         ),
@@ -453,18 +724,31 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
     ) -> dict[str, Any]:
         try:
             cwd = str(controller.store.workspace_dir(project_id))
-            from .jules_acp_bridge import _poll_jules_rest, promote_nars_to_jules_landscape
-            state = await _poll_jules_rest(remote_id, cwd)
+            from .jules_acp_bridge import check_jules_status, promote_nars_to_jules_landscape, load_session_store
+            state = await check_jules_status(remote_id, cwd)
+            session = load_session_store(cwd).get(remote_id, {})
 
-            # Map Jules state to Zenith state
-            zenith_state = "mission_running" if state.normalized_status in ("running", "queued", "pending", "active") else \
-                          "decide_attention" if state.succeeded else \
-                          "decide_attention"  # failed also routes to attention
+            # Bijection routing:
+            # - awaiting_user_feedback → orchestrator_answer_required
+            # - running/queued/pending/active → mission_running
+            # - completed-with-PR → decide_attention (pr_merge)
+            # - completed-without-PR or failed → decide_attention (patch debt)
+            if state.needs_orchestrator_answer:
+                zenith_state = "attention_needed"
+                debt_route = "orchestrator_answer"
+            elif state.normalized_status in ("running", "queued", "pending", "active"):
+                zenith_state = "mission_running"
+                debt_route = "wait"
+            elif state.succeeded:
+                zenith_state = "decide_attention"
+                debt_route = "pr_merge"
+            else:
+                zenith_state = "decide_attention"
+                debt_route = "patch"
 
             # NOT GREEDY: Only promote NARS when Jules reaches terminal state
             nars_promoted: list[str] = []
             if state.is_terminal:
-                # Find the active mission_id
                 from .models import MissionRunning
                 proj_state = controller.store.load_state(project_id)
                 if isinstance(proj_state, MissionRunning):
@@ -478,11 +762,18 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
                 "jules_status": state.status,
                 "jules_normalized": state.normalized_status,
                 "pr_url": state.pr_url,
+                "pushed_branch": state.pushed_branch,
+                "delivered": state.delivered,
                 "succeeded": state.succeeded,
+                "is_terminal": state.is_terminal,
+                "needs_orchestrator_answer": state.needs_orchestrator_answer,
+                "clarification_question": state.description if state.needs_orchestrator_answer else None,
                 "zenith_mapped_state": zenith_state,
-                "debt_mitigation_route": "patch" if not state.succeeded else "pr_merge",
-                "mating_contracts": state.pr_url is not None,
+                "debt_mitigation_route": debt_route,
+                "mating_contracts": state.delivered,
                 "nars_promoted": nars_promoted,
+                "mailbox_path": session.get("mailbox_path"),
+                "repo_root": session.get("repo_root"),
             }
         except Exception as exc:
             return {"error": "jules_bijective_sync_failed", "message": str(exc)}
@@ -499,11 +790,78 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
     ) -> dict[str, Any]:
         try:
             cwd = str(controller.store.workspace_dir(project_id))
-            from .jules_acp_bridge import _load_session_store
-            sessions = _load_session_store(cwd)
+            from .jules_acp_bridge import load_session_store
+            sessions = await asyncio.to_thread(load_session_store, cwd)
             return {"sessions": sessions}
         except Exception as exc:
             return {"error": "jules_list_sessions_failed", "message": str(exc)}
+
+    @mcp.tool(
+        name="mission_mail",
+        description=(
+            "Send or read mail within a mission's NARS-anchored mailbox. "
+            "Slug = mission id. The first line of the mailbox file is the "
+            "contract header (via contractreifier); subsequent lines are events. "
+            "Every event must carry NARS terms; body is capped at 200 chars. "
+            "Use to implement Jules-to-Jules post-PR discussion on shared NARS contracts."
+        ),
+    )
+    async def mission_mail(
+        project_id: Annotated[str, Field(description="Project id.")],
+        slug: Annotated[str, Field(description="Mission id (the contract slug).")],
+        action: Annotated[str, Field(description="Action: 'send' or 'read'.")],
+        # Send params
+        from_party: Annotated[str, Field(description="Sender: remote_id or 'orchestrator'.")] | None = None,
+        to_party: Annotated[str, Field(description="Recipient: remote_id, 'orchestrator', or '*' for broadcast.")] | None = None,
+        nars: Annotated[list[str], Field(description="NARS terms (required for send).")] | None = None,
+        body: Annotated[str, Field(description="Body text (max 200 chars for send).")] | None = None,
+        kind: Annotated[str, Field(description="Event kind: 'open', 'round', 'consensus', 'status'.")] = "round",
+        # Read params
+        last_n: Annotated[int, Field(description="Number of recent events to read (default 1).")] = 1,
+    ) -> dict[str, Any]:
+        try:
+            cwd = str(controller.store.workspace_dir(project_id))
+            from .jules_acp_bridge import append_mission_mailbox, load_session_store, read_mission_mailbox
+
+            if action == "send":
+                if not from_party or not to_party or not nars:
+                    return {"error": "missing_fields", "message": "send requires from_party, to_party, nars"}
+                if body is None:
+                    body = ""
+                if len(body) > 200:
+                    return {"error": "body_too_long", "message": "body exceeds 200 char limit"}
+                # Only conversational or orchestrator can send mail
+                if from_party != "orchestrator":
+                    store = load_session_store(cwd)
+                    session = store.get(from_party, {})
+                    state = session.get("state", "launched")
+                    if state != "conversational":
+                        return {"error": "not_conversational", "message": f"session {from_party} is {state}, must be conversational to send mail"}
+                path = await asyncio.to_thread(
+                    append_mission_mailbox,
+                    cwd,
+                    slug,
+                    from_party=from_party,
+                    to_party=to_party,
+                    kind=kind,
+                    nars=nars,
+                    body=body,
+                )
+                return {"sent": True, "mailbox_path": str(path), "slug": slug}
+
+            elif action == "read":
+                events = await asyncio.to_thread(
+                    read_mission_mailbox,
+                    cwd,
+                    slug,
+                    last_n=last_n,
+                )
+                return {"slug": slug, "events": events, "count": len(events)}
+
+            else:
+                return {"error": "invalid_action", "message": f"unknown action: {action}"}
+        except Exception as exc:
+            return {"error": "mission_mail_failed", "message": str(exc)}
 
 # ---------------------------------------------------------------------------
 # Worker tool

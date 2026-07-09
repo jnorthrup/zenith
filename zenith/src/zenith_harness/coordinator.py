@@ -35,6 +35,7 @@ from .models import (
     WorkHandoff,
 )
 from .storage import ProjectStore, utc_now_filesafe, workspace_fingerprint
+from .jules_acp_bridge import check_jules_status, check_jules_quota
 from .envelope import public_attention_items
 
 
@@ -127,6 +128,13 @@ class MissionCoordinator:
         if resume_result is not None:
             return resume_result
 
+        # Turn-start batch email poll: check waiting mailboxes before dispatching new work.
+        # This is the "batch email agent dispatch" — each turn attempts delivery
+        # against quotas and concurrency conservation, minimizing budget burn.
+        mail_result = self._poll_jules_mailboxes(mid, tl, task_state)
+        if mail_result is not None:
+            return mail_result
+
         gate_event = self._try_evaluate_a_gate(tl, task_state)
         if gate_event is not None:
             return self._apply_gate_event(mid, tl, task_state, gate_event)
@@ -134,6 +142,30 @@ class MissionCoordinator:
         runnable = self._all_runnable_tasks(tl, task_state)
         if not runnable:
             return StepResult.idle("no runnable task work; call end_mission to request closure")
+
+        # Check live Jules quota before dispatching any Jules work.
+        # This enforces both live concurrency and 24h rolling window headroom at turn-start.
+        jules_tasks = [t for t in runnable if self._is_jules_task(t)]
+        if jules_tasks:
+            workspace_dir = str(self.store.workspace_dir(self.project_id))
+            import asyncio
+            loop = asyncio.new_event_loop()
+            try:
+                active, headroom = loop.run_until_complete(check_jules_quota(workspace_dir))
+            finally:
+                loop.close()
+            # Also check rolling 24h quota
+            daily_quota = self.store.config.jules_quota_per_24h
+            dispatches_24h = self.store.jules_dispatches_in_last_24h(self.project_id)
+            rolling_headroom = max(0, daily_quota - dispatches_24h)
+            # Combine: need headroom in BOTH live concurrency AND rolling 24h
+            if headroom == 0 or rolling_headroom == 0:
+                # No headroom - skip all Jules tasks, proceed with non-Jules
+                runnable = [t for t in runnable if not self._is_jules_task(t)]
+                if not runnable:
+                    return StepResult.idle(
+                        f"Jules quota exhausted (live:{active} active, 24h:{dispatches_24h}/{daily_quota}); no non-Jules work"
+                    )
 
         validator_batch = self._validator_batch_for_pending_gate(tl, task_state, runnable)
         if len(validator_batch) > 1:
@@ -175,6 +207,16 @@ class MissionCoordinator:
             return self._apply_handoff(mid, task, synthetic, spawn_ts)
 
         self.store.save_attempt(self.project_id, mid, spawn_ts, task.id, handoff)
+
+        # Capture remote_id for bijective (Jules) tasks — needed for mailbox polling.
+        if isinstance(handoff, WorkHandoff) and handoff.pending_mail:
+            task_state = self.store.load_task_state(self.project_id, mid)
+            entry = task_state.tasks.setdefault(task.id, TaskStateEntry())
+            entry.remote_id = handoff.pending_mail[0].from_party
+            self.store.save_task_state(self.project_id, mid, task_state)
+            # Record rolling 24h quota for Jules dispatch
+            self.store.record_jules_dispatch(self.project_id)
+
         return self._apply_handoff(mid, task, handoff, spawn_ts)
 
     # ------------------------------------------------------------------
@@ -210,13 +252,14 @@ class MissionCoordinator:
                 task_state.status_of(dep) == "cleared" for dep in task.depends_on
             ):
                 runnable.append(task)
-        priority = [
-            task for task in runnable if task_state.priority_respawn_of(task.id)
-        ]
-        plain = [
-            task for task in runnable if not task_state.priority_respawn_of(task.id)
-        ]
-        return priority + plain
+        return runnable
+
+    def _is_jules_task(self, task: Task) -> bool:
+        """Check if task uses Jules provider (worker or validator)."""
+        # Check task skill for jules provider, or use config default
+        # For now, check the config's worker_provider_name == "jules"
+        # TODO: per-task provider override via skill or task field
+        return self.store.config.worker_provider_name == "jules"
 
     @staticmethod
     def _validator_batch_for_pending_gate(
@@ -391,9 +434,19 @@ class MissionCoordinator:
 
         if task.type == "work":
             if not handoff.done:
+                # Bijective dispatch (Jules): done=False with pending_mail means
+                # "waiting on mailbox" not failure. The orchestrator holds outbound
+                # mail and will batch it in the next turn.
+                if isinstance(handoff, WorkHandoff) and handoff.pending_mail:
+                    task_state.set_status(task.id, "waiting")
+                    task_state.record_attempt(task.id, spawn_ts, success=False)
+                    entry = task_state.tasks.setdefault(task.id, TaskStateEntry())
+                    entry.last_workspace_fingerprint = ws_fp
+                    self.store.save_task_state(self.project_id, mid, task_state)
+                    return []  # No attention needed - just waiting on mailbox
+                # Actual failure
                 task_state.set_status(task.id, "failed")
                 task_state.record_attempt(task.id, spawn_ts, success=False)
-                # Update workspace fingerprint on failed attempt too (shows attempt made)
                 entry = task_state.tasks.setdefault(task.id, TaskStateEntry())
                 entry.last_workspace_fingerprint = ws_fp
                 if "cannot_proceed" in handoff.report.lower():
@@ -782,6 +835,86 @@ class MissionCoordinator:
     # ------------------------------------------------------------------
     # Resume from disk
     # ------------------------------------------------------------------
+
+    def _poll_jules_mailboxes(
+        self, mid: str, tl: TaskList, task_state: TaskStateFile
+    ) -> StepResult | None:
+        """Turn-start batch email poll: check waiting tasks' mailboxes.
+
+        For each task with status="waiting" and a stored remote_id:
+        - Call check_jules_status(remote_id) non-blocking
+        - If terminal (success/failure): apply handoff, mark cleared/failed
+        - If awaiting feedback: raise attention
+        - If still running: leave as "waiting", skip to next
+
+        Returns StepResult if attention was raised, None to proceed with dispatch.
+        This is the "batch email agent dispatch" — each turn attempts delivery
+        against quotas and concurrency conservation, minimizing budget burn.
+        """
+        import asyncio
+
+        attention: list[AttentionItemInternal] = []
+        workspace_dir = str(self.store.workspace_dir(self.project_id))
+
+        for task in tl.tasks:
+            entry = task_state.tasks.get(task.id)
+            if entry is None or entry.status != "waiting":
+                continue
+            if not entry.remote_id:
+                continue
+
+            # Run the async check_jules_status in a sync context.
+            loop = asyncio.new_event_loop()
+            try:
+                jules_state = loop.run_until_complete(
+                    check_jules_status(entry.remote_id, workspace_dir)
+                )
+            except Exception:
+                # Network error or Jules unavailable — skip, stay waiting.
+                continue
+            finally:
+                loop.close()
+
+            if jules_state.is_terminal:
+                # Jules finished — apply the handoff.
+                if jules_state.delivered:
+                    # Success: PR created
+                    task_state.set_status(task.id, "cleared")
+                    entry.last_done_at = utc_now_filesafe()
+                    entry.success_count = entry.success_count + 1
+                else:
+                    # Failure
+                    task_state.set_status(task.id, "failed")
+                    entry.last_done_at = utc_now_filesafe()
+
+                # Write synthetic handoff for audit trail.
+                spawn_ts = entry.last_attempt or utc_now_filesafe()
+                report = f"Jules {jules_state.normalized_status}: {jules_state.description}"
+                if jules_state.pr_url:
+                    report += f" PR: {jules_state.pr_url}"
+                handoff = WorkHandoff(
+                    node_id=task.id,
+                    done=True,
+                    report=report,
+                )
+                self.store.save_attempt(self.project_id, mid, spawn_ts, task.id, handoff)
+                self.store.save_task_state(self.project_id, mid, task_state)
+
+            elif jules_state.needs_orchestrator_answer:
+                # Jules is waiting for our reply — raise attention.
+                attention.append(
+                    attn_factory.node_failed(mid, task, WorkHandoff(
+                        node_id=task.id,
+                        done=False,
+                        report=f"Jules awaiting feedback: {jules_state.description}",
+                    ))
+                )
+
+        if attention:
+            self.store.save_task_state(self.project_id, mid, task_state)
+            return StepResult.attention_needed(f"{len(attention)} Jules task(s) awaiting feedback")
+
+        return None  # No attention — proceed to dispatch
 
     def _reconcile_pending_attempts(
         self, mid: str, tl: TaskList, task_state: TaskStateFile

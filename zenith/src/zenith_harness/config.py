@@ -68,6 +68,7 @@ class HarnessConfig:
     worker_reasoning_effort: str | None = None
     validator_reasoning_effort: str | None = None
     terminal_reviewer_reasoning_effort: str | None = None
+    jules_quota_per_24h: int = 10  # Max Jules dispatches per 24h rolling window
 
     @classmethod
     def discover(cls) -> HarnessConfig:
