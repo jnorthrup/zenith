@@ -139,9 +139,25 @@ class TokenManager:
         if not force_refresh and self._token:
             return self._token
 
-        # First check: explicit JULES_API_KEY takes priority
+        # First check: explicit JULES_API_KEY takes priority, but try cached OAuth token first if active
         env_key = os.environ.get("JULES_API_KEY", "")
         if env_key:
+            import subprocess
+            try:
+                res = subprocess.run(
+                    ["gcloud", "auth", "print-access-token"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if res.returncode == 0:
+                    token = res.stdout.strip()
+                    if token:
+                        self._token = token
+                        return token
+            except Exception:
+                pass
             self._token = env_key
             return env_key
 

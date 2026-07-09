@@ -11,9 +11,24 @@ from zenith_harness.providers import get_provider
 
 
 def test_acp_subprocess_env_jules(monkeypatch) -> None:
+    from unittest.mock import patch
+    import subprocess
+    from zenith_harness.jules_acp_bridge import _token_manager
+
+    # Reset cached token to force dynamic resolution
+    _token_manager._token = None
+
     monkeypatch.setenv("JULES_API_KEY", "test-jules-key")
 
-    env = _acp_subprocess_env(get_provider("jules"))
+    mock_run_res = subprocess.CompletedProcess(
+        args=["gcloud", "auth", "print-access-token"],
+        returncode=1,
+        stdout="",
+        stderr="gcloud error"
+    )
+
+    with patch("subprocess.run", return_value=mock_run_res):
+        env = _acp_subprocess_env(get_provider("jules"))
 
     assert env["JULES_API_KEY"] == "test-jules-key"
 
