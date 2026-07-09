@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,6 +12,10 @@ import click
 from .assets import AssetLoader, iter_skill_directories
 from .config import HarnessConfig
 from .envelope import render_task_list
+
+# Pattern to match Jules Integration section in the orchestrator prompt
+JULES_INTEGRATION_SECTION_RE = r"## Jules Integration \(Zenith Task Evaluator\).*?(?=\n## |\Z)"
+JULES_ANTIPATTERN_RE = r"\n?- Blocking synchronously on Jules.*"
 from .providers import (
     ProviderDefinition,
     ProviderSelection,
@@ -590,6 +595,17 @@ def _replace_managed_block(path: Path, start: str, end: str, block: str) -> None
     path.write_text(updated, encoding="utf-8")
 
 
+def _strip_jules_sections(body: str) -> str:
+    """Strip Jules Integration section and anti-pattern from orchestrator prompt."""
+    # Remove Jules Integration section (including its bullet points)
+    body = re.sub(JULES_INTEGRATION_SECTION_RE, "", body, flags=re.DOTALL)
+    # Remove the Jules anti-pattern bullet
+    body = re.sub(JULES_ANTIPATTERN_RE, "", body)
+    # Clean up any resulting extra blank lines
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    return body.strip()
+
+
 def _setup_provider_assets(
     workspace: Path,
     loader: AssetLoader,
@@ -616,16 +632,35 @@ def _setup_provider_assets(
         path = workspace / provider.orchestrator_prompt_output_path
         path.parent.mkdir(parents=True, exist_ok=True)
         source = loader.config.bundled_dir / "prompts" / "orchestrator" / "system_prompt.md"
+
+        # Check Jules OAuth status to conditionally include Jules-specific content
+        try:
+            from .jules_acp_bridge import ensure_jules_authenticated
+            jules_active = ensure_jules_authenticated()
+        except Exception:
+            jules_active = False
+
         if use_symlinks and source.exists():
-            if path.exists() and not path.is_symlink():
-                path.unlink()
-            if not (path.is_symlink() and path.resolve() == source.resolve()):
-                _atomic_symlink(source.resolve(), path)
+            # Only use symlink when Jules is active (full prompt needed)
+            if jules_active:
+                if path.exists() and not path.is_symlink():
+                    path.unlink()
+                if not (path.is_symlink() and path.resolve() == source.resolve()):
+                    _atomic_symlink(source.resolve(), path)
+            else:
+                # Jules inactive: strip Jules sections and write plain file
+                if path.is_symlink():
+                    path.unlink()
+                body = loader.load_prompt_file("orchestrator", "system_prompt.md")
+                body = _strip_jules_sections(body)
+                path.write_text(body, encoding="utf-8")
         else:
             if path.is_symlink():
                 path.unlink()
             if not path.exists():
                 body = loader.load_prompt_file("orchestrator", "system_prompt.md")
+                if not jules_active:
+                    body = _strip_jules_sections(body)
                 path.write_text(body, encoding="utf-8")
 
 
