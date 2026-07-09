@@ -19,6 +19,7 @@ JULES_ANTIPATTERN_RE = r"\n?- Blocking synchronously on Jules.*"
 from .providers import (
     ProviderDefinition,
     ProviderSelection,
+    default_validator_provider_name,
     default_worker_provider_name,
     get_provider,
     provider_names_for_role,
@@ -457,11 +458,14 @@ def _resolve_selection(
     if agent and orchestrator and agent != orchestrator:
         raise click.UsageError("--agent conflicts with --orchestrator-provider")
     orch = orchestrator or agent or "claude"
+    explicit_worker = worker is not None or (agent is not None and agent in provider_names_for_role("worker"))
     wrk = worker or (agent if agent in provider_names_for_role("worker") else None) or default_worker_provider_name(orch)
+    # Default validator: use local provider when worker is remote to avoid Jules validation slop
+    val = validator or (None if explicit_worker else None) or default_validator_provider_name(wrk, explicit_worker)
     return ProviderSelection(
         orchestrator=get_provider(orch),
         worker=get_provider(wrk),
-        validation_worker=get_provider(validator) if validator else None,
+        validation_worker=get_provider(val) if val else None,
         worker_acp_command=worker_acp_command,
         validation_worker_acp_command=validator_acp_command,
     )
