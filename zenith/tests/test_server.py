@@ -70,6 +70,7 @@ async def test_orchestrator_tools_registered(config: HarnessConfig) -> None:
         "jules_ensure_auth",
         "jules_converse",
         "jules_bijective_sync",
+        "jules_list_sessions",
     }
 
 
@@ -421,3 +422,33 @@ async def test_jules_converse_tool(config: HarnessConfig, workspace: Path) -> No
         assert res["status"] == "completed"
         assert res["pr_url"] == "https://github.com/pull/2"
         assert res["succeeded"] is True
+
+
+@pytest.mark.asyncio
+async def test_jules_list_sessions_tool(config: HarnessConfig, workspace: Path) -> None:
+    from zenith_harness.jules_acp_bridge import _save_jules_session
+    
+    controller = ProjectController(
+        config,
+        MockDispatcher(lambda r: None),
+        MockTerminalReviewer(TerminalReviewHandoff(done=True, report="")),
+    )
+    server = create_orchestrator_server(config, controller)
+    await server.call_tool(
+        "start_project",
+        {"brief": "Backlog check.", "workspace_dir": str(workspace)},
+    )
+    pid = ProjectStore(config).list_projects()[0].id
+
+    # Populate a fake jules session in the database
+    _save_jules_session(str(workspace), "sess-backlog-1", "t1", pid, "mission-001")
+
+    res_list = await server.call_tool(
+        "jules_list_sessions",
+        {"project_id": pid},
+    )
+    res = res_list.structured_content
+    assert "sessions" in res
+    assert "sess-backlog-1" in res["sessions"]
+    assert res["sessions"]["sess-backlog-1"]["task_id"] == "t1"
+

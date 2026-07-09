@@ -487,6 +487,24 @@ def _register_orchestrator_tools(mcp: FastMCP, controller: ProjectController) ->
         except Exception as exc:
             return {"error": "jules_bijective_sync_failed", "message": str(exc)}
 
+    @mcp.tool(
+        name="jules_list_sessions",
+        description=(
+            "List all recorded Jules sessions in the workspace backlog. "
+            "Returns a dictionary of remote_id to session metadata (task_id, project_id, mission_id, created_at)."
+        ),
+    )
+    async def jules_list_sessions(
+        project_id: Annotated[str, Field(description="Project id.")],
+    ) -> dict[str, Any]:
+        try:
+            cwd = str(controller.store.workspace_dir(project_id))
+            from .jules_acp_bridge import _load_session_store
+            sessions = _load_session_store(cwd)
+            return {"sessions": sessions}
+        except Exception as exc:
+            return {"error": "jules_list_sessions_failed", "message": str(exc)}
+
 # ---------------------------------------------------------------------------
 # Worker tool
 # ---------------------------------------------------------------------------
