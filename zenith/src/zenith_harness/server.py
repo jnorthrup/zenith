@@ -1010,7 +1010,15 @@ def main() -> None:
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)  # 0 → ephemeral
+    parser.add_argument("--orchestrator-provider", default=None)
+    parser.add_argument("--worker-provider", default=None)
     args = parser.parse_args()
+
+    # Apply CLI overrides to environment before config discovery
+    if args.orchestrator_provider:
+        os.environ["ZENITH_ORCHESTRATOR_PROVIDER"] = args.orchestrator_provider
+    if args.worker_provider:
+        os.environ["ZENITH_WORKER_PROVIDER"] = args.worker_provider
 
     if args.mode == "orchestrator":
         config = HarnessConfig.discover()

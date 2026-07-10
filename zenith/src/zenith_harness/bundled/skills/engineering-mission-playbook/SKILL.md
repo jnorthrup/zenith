@@ -101,6 +101,18 @@ Do not proceed to contract authoring while required surfaces have only generic c
 
 Engineering contracts use `VAL-*` assertions. Each assertion is a compact validation target stored as `contract/<ID>.md` under the current runtime mission contract directory. The contract is the engineering definition of done; it is not the task list, not the implementation plan, and not a summary of work packages.
 
+**NARS Header Required**: Every contract file MUST start with exactly 10 lines of NARS (Non-Axiomatic Reasoning System) in machine-readable JSON format. This is the semantic design layer all LLMs understand natively.
+
+```markdown
+{"id":"<CONTRACT_ID>","nars":[
+<term1 --> term2>,<term3 --> term4>,<term5 --> term6>,<term7 --> term8>,<term8 --> term9>,<term10 --> term11>,<term12 --> term13>,<term14 --> term15>,<term16 --> term17>,<term18 --> term19>
+]}
+# VAL-AREA-001: Short title
+...
+```
+
+Format: `head -n10` returns JSON {id,nars:[<-->...]}, max 280 chars/line, 2800 total. The LLM will make the most succinct NARS expressions. This header is the semantic fingerprint - the rest of the contract is human-readable markdown.
+
 Author contracts from the accepted scope charter, scope/capability inventory, investigation evidence, and actor interaction inventory. Enumerate what the user, caller, operator, or consumer can do, see, click, type, call, run, trigger, retry, cancel, edit, delete, import, export, migrate, recover, or observe. Organize assertions by feature area, surface area, workflow, and cross-area flow when useful.
 
 Do not let task count determine assertion count. A broad mission should normally have many more `VAL-*` assertions than work tasks. One `work` task may later own many related assertions when one coherent implementation boundary completes them. Contract boundaries are chosen by validation coherence, not task topology.

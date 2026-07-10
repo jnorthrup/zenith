@@ -257,10 +257,18 @@ class MissionCoordinator:
         return runnable
 
     def _is_jules_task(self, task: Task) -> bool:
-        """Check if task uses Jules provider (worker or validator)."""
-        # Check task skill for jules provider, or use config default
-        # For now, check the config's worker_provider_name == "jules"
-        # TODO: per-task provider override via skill or task field
+        """Check if task uses Jules provider (worker or validator).
+        
+        Per-task override: if skill is in jules skill dirs (.jules/skills, .agents/skills),
+        use Jules for this specific task.
+        """
+        # Check if task skill is in Jules skill dirs
+        if task.skill:
+            jules_skill_dirs = (".jules/skills", ".agents/skills")
+            for skill_dir in jules_skill_dirs:
+                if task.skill.startswith(skill_dir) or task.skill.endswith(skill_dir):
+                    return True
+        # Fallback to global config
         return self.store.config.worker_provider_name == "jules"
 
     @staticmethod
