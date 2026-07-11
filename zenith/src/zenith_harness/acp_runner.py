@@ -9,7 +9,6 @@ import socket
 import subprocess
 import sys
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, ClassVar, Coroutine, Literal
@@ -25,7 +24,6 @@ from .models import (
 )
 from .storage import (
     ProjectStore,
-    atomic_write_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,9 +96,7 @@ class ACPError(Exception):
     pass
 
 
-def _augment_acp_command(
-    command: str, provider, reasoning_effort: str | None = None
-) -> str:
+def _augment_acp_command(command: str, provider, reasoning_effort: str | None = None) -> str:
     """Append provider-specific config flags to the ACP launch command.
 
     For codex-acp this is the no-ask, no-sandbox combo — equivalent to
@@ -153,6 +149,7 @@ def _acp_subprocess_env(provider) -> dict[str, str]:
     elif name == "jules":
         try:
             from .jules_acp_bridge import _token_manager
+
             token = _token_manager.get_token()
             if token:
                 # Pass OAuth token to subprocess for Jules CLI
@@ -415,7 +412,15 @@ class ACPClient:
                 if allow is not None:
                     break
             if allow is None:
-                allow = next((o for o in options if "allow" in str(o.get("kind", "")).lower() or "allow" in str(o.get("optionId", "")).lower()), None)
+                allow = next(
+                    (
+                        o
+                        for o in options
+                        if "allow" in str(o.get("kind", "")).lower()
+                        or "allow" in str(o.get("optionId", "")).lower()
+                    ),
+                    None,
+                )
             if allow is None:
                 allow = options[0] if options else {"optionId": "allow"}
             return {
@@ -453,12 +458,13 @@ class ACPClient:
                     text = "\n".join(lines[line : line + int(limit)])
                 else:
                     text = "\n".join(lines[line:])
-            
+
             # Squeeze consecutive whitespace (like tr -s '[:space:]')
             # only for non-indentation grammars (not Python/YAML)
             suffix = path.suffix.lower()
             if suffix not in (".py", ".yaml", ".yml"):
                 import re
+
                 text = re.sub(r"([ \t\r\n\v\f])\1+", r"\1", text)
         except OSError:
             text = ""
@@ -598,6 +604,7 @@ class ACPNodeRunner:
                         _allocated_ports.add(port)
                         return port
             import random
+
             return random.randint(30000, 60000)
 
     async def _execute_acp_subprocess(
@@ -605,7 +612,7 @@ class ACPNodeRunner:
         acp_command: str,
         workspace_dir: str,
         acp_env: dict[str, str],
-        provider: ProviderDefinition,
+        provider: Any,
         mcp_cfg: dict[str, Any],
         first_message: str,
         report_path: Path,
@@ -627,7 +634,7 @@ class ACPNodeRunner:
             session_update_handler=progress_tracker.handle_session_update,
         )
         await client.start()
-        
+
         prompt_stop_reason: str | None = None
         session_error: str | None = None
         exit_code: int | None = None
@@ -695,7 +702,7 @@ class ACPNodeRunner:
             await progress_tracker.flush()
             await client.cleanup(close_main_process=False)
             await _close_subprocess(process, timeout=0)
-            
+
         return prompt_stop_reason, exit_code, stderr, session_error
 
     async def run_node(
@@ -710,9 +717,7 @@ class ACPNodeRunner:
         progress_callback: ProgressCallback | None = None,
     ) -> NodeHandoff:
         """Spawn the worker MCP server + ACP agent; poll the attempt file; return the handoff."""
-        role: Literal["validator", "worker"] = (
-            "validator" if task.type == "validate" else "worker"
-        )
+        role: Literal["validator", "worker"] = "validator" if task.type == "validate" else "worker"
         role_config = self.config.for_role(role)
         acp_command = role_config.resolved_worker_acp_command
 
@@ -789,7 +794,12 @@ class ACPNodeRunner:
             acp_env["ZENITH_MISSION_ID"] = mission_id
             acp_env["ZENITH_HOME"] = str(self.config.harness_home)
 
-            prompt_stop_reason, worker_exit_code, worker_stderr, session_error = await self._execute_acp_subprocess(
+            (
+                prompt_stop_reason,
+                worker_exit_code,
+                worker_stderr,
+                session_error,
+            ) = await self._execute_acp_subprocess(
                 acp_command=acp_command,
                 workspace_dir=workspace_dir,
                 acp_env=acp_env,
@@ -824,6 +834,7 @@ class ACPNodeRunner:
     def _parse_handoff_file(self, handoff_path: Path, task: Task) -> NodeHandoff:
         """Parse a handoff file written by the worker MCP server."""
         import json
+
         raw = handoff_path.read_text(encoding="utf-8")
         data = json.loads(raw)
         if isinstance(data, dict) and ("items" in data or "passed" in data):
@@ -874,6 +885,7 @@ class ACPNodeRunner:
 
         try:
             import json
+
             handoff_path.parent.mkdir(parents=True, exist_ok=True)
             handoff_path.write_text(
                 json.dumps(handoff.model_dump(mode="json"), indent=2),
@@ -898,8 +910,7 @@ class ACPNodeRunner:
         acp_command = role_config.resolved_worker_acp_command
         if not acp_command:
             raise RuntimeError(
-                "No ACP command for terminal reviewer. "
-                "Set ZENITH_TERMINAL_REVIEWER_ACP_COMMAND."
+                "No ACP command for terminal reviewer. Set ZENITH_TERMINAL_REVIEWER_ACP_COMMAND."
             )
         acp_command = _augment_acp_command(acp_command, role_config.worker_provider)
 
@@ -910,6 +921,36 @@ class ACPNodeRunner:
 
         _ensure_claude_settings(Path(workspace_dir), role_config.worker_provider)
 
+        await self._run_terminal_reviewer_session(
+            project_id=project_id,
+            mission_id=mission_id,
+            workspace_dir=workspace_dir,
+            project_bucket=project_bucket,
+            report_path=report_path,
+            role_config=role_config,
+            acp_command=acp_command,
+            progress_callback=progress_callback,
+        )
+
+        if report_path.exists():
+            return TerminalReviewHandoff.model_validate_json(report_path.read_text())
+        raise RuntimeError(
+            "Terminal reviewer exited without calling submit_terminal_review; "
+            "no terminal review was written. The mission cannot be sealed as done "
+            "without an explicit reviewer verdict."
+        )
+
+    async def _run_terminal_reviewer_session(
+        self,
+        project_id: str,
+        mission_id: str,
+        workspace_dir: str,
+        project_bucket: str,
+        report_path: Path,
+        role_config: Any,
+        acp_command: list[str],
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
         mcp_port = await self._allocate_free_port()
         mcp_process = None
         try:
@@ -944,7 +985,12 @@ class ACPNodeRunner:
                 provider_name=role_config.worker_provider.name,
             )
 
-            prompt_stop_reason, exit_code, stderr, session_error = await self._execute_acp_subprocess(
+            (
+                prompt_stop_reason,
+                exit_code,
+                stderr,
+                session_error,
+            ) = await self._execute_acp_subprocess(
                 acp_command=acp_command,
                 workspace_dir=workspace_dir,
                 acp_env=_acp_subprocess_env(role_config.worker_provider),
@@ -964,14 +1010,6 @@ class ACPNodeRunner:
                     except OSError:
                         pass
                 await _close_subprocess(mcp_process, timeout=5)
-
-        if report_path.exists():
-            return TerminalReviewHandoff.model_validate_json(report_path.read_text())
-        raise RuntimeError(
-            "Terminal reviewer exited without calling submit_terminal_review; "
-            "no terminal review was written. The mission cannot be sealed as done "
-            "without an explicit reviewer verdict."
-        )
 
     # ------------------------------------------------------------------
     # Subprocess plumbing
@@ -1085,16 +1123,12 @@ class ACPNodeRunner:
                 return False
             await asyncio.sleep(0.1)
 
-    async def _maybe_set_mode(
-        self, client: ACPClient, session_id: str, provider
-    ) -> None:
+    async def _maybe_set_mode(self, client: ACPClient, session_id: str, provider) -> None:
         mode = getattr(provider, "acp_runtime_mode", None)
         if not mode:
             return
         try:
-            await client.send_request(
-                "session/set_mode", {"sessionId": session_id, "modeId": mode}
-            )
+            await client.send_request("session/set_mode", {"sessionId": session_id, "modeId": mode})
         except ACPError as exc:
             raise ACPError(
                 f"Failed to set ACP runtime mode {mode!r} for {provider.name}: {exc}"
@@ -1198,9 +1232,7 @@ class ACPNodeRunner:
         renderer to template absolute paths.
         """
         workspace_dir = str(
-            Path(cwd).expanduser().resolve()
-            if cwd
-            else store.workspace_dir(project_id)
+            Path(cwd).expanduser().resolve() if cwd else store.workspace_dir(project_id)
         )
         project_bucket = str(store.zenith_dir(project_id))
         return workspace_dir, project_bucket
@@ -1299,6 +1331,8 @@ class ACPNodeRunner:
         return system_prompt
 
     # ---------------------------------------------------------------------------
+
+
 # Contract assertion truncation helpers
 # ---------------------------------------------------------------------------
 
@@ -1308,10 +1342,7 @@ def _truncate_contract_assertion(body: str, path: str) -> str:
     if len(body) <= CONTRACT_INLINE_MAX:
         return body.rstrip() + "\n"
     preview = body[:CONTRACT_TRUNCATE_PREVIEW].rstrip()
-    return (
-        f"{preview}\n\n"
-        f"--- TRUNCATED ({len(body)} chars, read full at `{path}`) ---\n"
-    )
+    return f"{preview}\n\n--- TRUNCATED ({len(body)} chars, read full at `{path}`) ---\n"
 
 
 def _format_attempts_dir_hint(attempts_dir: str) -> str:
@@ -1326,7 +1357,6 @@ def _format_attempts_dir_hint(attempts_dir: str) -> str:
 # ---------------------------------------------------------------------------
 # ACP Node Runner
 # ---------------------------------------------------------------------------
-
 
 
 def _run_coro_blocking(coro: Coroutine[Any, Any, Any]) -> Any:
@@ -1408,9 +1438,7 @@ class ACPTerminalReviewer:
         self.loader = AssetLoader(config)
         self.runner = ACPNodeRunner(config=config, loader=self.loader)
 
-    def review(
-        self, project_id: str, mission_id: str, spawn_ts: str
-    ) -> TerminalReviewHandoff:
+    def review(self, project_id: str, mission_id: str, spawn_ts: str) -> TerminalReviewHandoff:
         return _run_coro_blocking(
             self.runner.run_terminal_review(
                 project_id=project_id,
