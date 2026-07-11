@@ -9,7 +9,6 @@ import socket
 import subprocess
 import sys
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, ClassVar, Coroutine, Literal
@@ -17,6 +16,7 @@ from typing import Any, Awaitable, Callable, ClassVar, Coroutine, Literal
 from .assets import AssetLoader
 from .config import HarnessConfig
 from .dispatcher import DispatchRequest, NodeHandoff
+from .providers import ProviderDefinition
 from .models import (
     Task,
     TerminalReviewHandoff,
@@ -25,7 +25,6 @@ from .models import (
 )
 from .storage import (
     ProjectStore,
-    atomic_write_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,9 +97,7 @@ class ACPError(Exception):
     pass
 
 
-def _augment_acp_command(
-    command: str, provider, reasoning_effort: str | None = None
-) -> str:
+def _augment_acp_command(command: str, provider, reasoning_effort: str | None = None) -> str:
     """Append provider-specific config flags to the ACP launch command.
 
     For codex-acp this is the no-ask, no-sandbox combo — equivalent to
@@ -153,6 +150,7 @@ def _acp_subprocess_env(provider) -> dict[str, str]:
     elif name == "jules":
         try:
             from .jules_acp_bridge import _token_manager
+
             token = _token_manager.get_token()
             if token:
                 # Pass OAuth token to subprocess for Jules CLI
@@ -415,7 +413,15 @@ class ACPClient:
                 if allow is not None:
                     break
             if allow is None:
-                allow = next((o for o in options if "allow" in str(o.get("kind", "")).lower() or "allow" in str(o.get("optionId", "")).lower()), None)
+                allow = next(
+                    (
+                        o
+                        for o in options
+                        if "allow" in str(o.get("kind", "")).lower()
+                        or "allow" in str(o.get("optionId", "")).lower()
+                    ),
+                    None,
+                )
             if allow is None:
                 allow = options[0] if options else {"optionId": "allow"}
             return {
@@ -453,12 +459,13 @@ class ACPClient:
                     text = "\n".join(lines[line : line + int(limit)])
                 else:
                     text = "\n".join(lines[line:])
-            
+
             # Squeeze consecutive whitespace (like tr -s '[:space:]')
             # only for non-indentation grammars (not Python/YAML)
             suffix = path.suffix.lower()
             if suffix not in (".py", ".yaml", ".yml"):
                 import re
+
                 text = re.sub(r"([ \t\r\n\v\f])\1+", r"\1", text)
         except OSError:
             text = ""
@@ -598,6 +605,7 @@ class ACPNodeRunner:
                         _allocated_ports.add(port)
                         return port
             import random
+
             return random.randint(30000, 60000)
 
     async def _execute_acp_subprocess(
@@ -627,7 +635,7 @@ class ACPNodeRunner:
             session_update_handler=progress_tracker.handle_session_update,
         )
         await client.start()
-        
+
         prompt_stop_reason: str | None = None
         session_error: str | None = None
         exit_code: int | None = None
@@ -695,8 +703,130 @@ class ACPNodeRunner:
             await progress_tracker.flush()
             await client.cleanup(close_main_process=False)
             await _close_subprocess(process, timeout=0)
-            
+
         return prompt_stop_reason, exit_code, stderr, session_error
+
+    def _prepare_acp_env(
+        self,
+        provider,
+        handoff_path: Path,
+        task: Task,
+        project_id: str,
+        mission_id: str,
+    ) -> dict[str, str]:
+        acp_env = _acp_subprocess_env(provider)
+        acp_env["ZENITH_HANDOFF_PATH"] = str(handoff_path)
+        acp_env["ZENITH_NODE_ID"] = task.id
+        acp_env["ZENITH_NODE_TYPE"] = task.type
+        acp_env["ZENITH_PROJECT_ID"] = project_id
+        acp_env["ZENITH_MISSION_ID"] = mission_id
+        acp_env["ZENITH_HOME"] = str(self.config.harness_home)
+        return acp_env
+
+    async def _run_with_mcp_server(
+        self,
+        task: Task,
+        project_id: str,
+        mission_id: str,
+        handoff_path: Path,
+        workspace_dir: str,
+        project_bucket: str,
+        store: ProjectStore,
+        role_config,
+        acp_command: str,
+        progress_callback: ProgressCallback | None,
+    ) -> tuple[str | None, int | None, str, str | None]:
+        mcp_port = await self._allocate_free_port()
+        mcp_process = None
+        try:
+            mcp_process = await self._start_worker_mcp_server(
+                task=task,
+                project_id=project_id,
+                mission_id=mission_id,
+                handoff_path=str(handoff_path),
+                workspace_dir=workspace_dir,
+                mcp_port=mcp_port,
+            )
+            try:
+                await self._wait_for_server_ready("127.0.0.1", mcp_port)
+            except TimeoutError:
+                if mcp_process.returncode is None:
+                    mcp_process.terminate()
+                await _close_subprocess(mcp_process, timeout=5)
+                return None, None, "Worker MCP server failed to start", None
+
+            worker_mcp_cfg = {
+                "type": "http",
+                "name": "zenith-worker",
+                "url": f"http://127.0.0.1:{mcp_port}/mcp",
+                "headers": [],
+                "env": [],
+            }
+
+            first_message = self._render_prompts(
+                task=task,
+                mission_id=mission_id,
+                project_bucket=project_bucket,
+                workspace_dir=workspace_dir,
+                store=store,
+                project_id=project_id,
+                provider_name=role_config.worker_provider.name,
+            )
+
+            acp_env = self._prepare_acp_env(
+                provider=role_config.worker_provider,
+                handoff_path=handoff_path,
+                task=task,
+                project_id=project_id,
+                mission_id=mission_id,
+            )
+
+            return await self._execute_acp_subprocess(
+                acp_command=acp_command,
+                workspace_dir=workspace_dir,
+                acp_env=acp_env,
+                provider=role_config.worker_provider,
+                mcp_cfg=worker_mcp_cfg,
+                first_message=first_message,
+                report_path=handoff_path,
+                progress_callback=progress_callback,
+            )
+        finally:
+            async with _port_lock:
+                _allocated_ports.discard(mcp_port)
+            if mcp_process is not None:
+                if mcp_process.returncode is None:
+                    try:
+                        mcp_process.terminate()
+                    except OSError:
+                        pass
+                await _close_subprocess(mcp_process, timeout=5)
+
+    def _resolve_handoff(
+        self,
+        handoff_path: Path,
+        task: Task,
+        prompt_stop_reason: str | None,
+        worker_exit_code: int | None,
+        worker_stderr: str,
+        session_error: str | None,
+    ) -> NodeHandoff:
+        if handoff_path.exists():
+            return self._parse_handoff_file(handoff_path, task)
+
+        if worker_stderr == "Worker MCP server failed to start" and worker_exit_code is None:
+            return self._synthesize_missing_handoff(
+                task, summary="Worker MCP server failed to start"
+            )
+
+        return self._synthesize_and_persist_missing_handoff(
+            handoff_path=handoff_path,
+            task=task,
+            stop_reason=prompt_stop_reason,
+            exit_code=worker_exit_code,
+            stderr=worker_stderr,
+            session_error=session_error,
+        )
 
     async def run_node(
         self,
@@ -710,9 +840,7 @@ class ACPNodeRunner:
         progress_callback: ProgressCallback | None = None,
     ) -> NodeHandoff:
         """Spawn the worker MCP server + ACP agent; poll the attempt file; return the handoff."""
-        role: Literal["validator", "worker"] = (
-            "validator" if task.type == "validate" else "worker"
-        )
+        role: Literal["validator", "worker"] = "validator" if task.type == "validate" else "worker"
         role_config = self.config.for_role(role)
         acp_command = role_config.resolved_worker_acp_command
 
@@ -742,88 +870,37 @@ class ACPNodeRunner:
 
         _ensure_claude_settings(Path(workspace_dir), role_config.worker_provider)
 
-        mcp_port = await self._allocate_free_port()
-        mcp_process = None
-        try:
-            mcp_process = await self._start_worker_mcp_server(
-                task=task,
-                project_id=project_id,
-                mission_id=mission_id,
-                handoff_path=str(handoff_path),
-                workspace_dir=workspace_dir,
-                mcp_port=mcp_port,
-            )
-            try:
-                await self._wait_for_server_ready("127.0.0.1", mcp_port)
-            except TimeoutError:
-                if mcp_process.returncode is None:
-                    mcp_process.terminate()
-                await _close_subprocess(mcp_process, timeout=5)
-                return self._synthesize_missing_handoff(
-                    task, summary="Worker MCP server failed to start"
-                )
+        (
+            prompt_stop_reason,
+            worker_exit_code,
+            worker_stderr,
+            session_error,
+        ) = await self._run_with_mcp_server(
+            task=task,
+            project_id=project_id,
+            mission_id=mission_id,
+            handoff_path=handoff_path,
+            workspace_dir=workspace_dir,
+            project_bucket=project_bucket,
+            store=store,
+            role_config=role_config,
+            acp_command=acp_command,
+            progress_callback=progress_callback,
+        )
 
-            worker_mcp_cfg = {
-                "type": "http",
-                "name": "zenith-worker",
-                "url": f"http://127.0.0.1:{mcp_port}/mcp",
-                "headers": [],
-                "env": [],
-            }
-
-            first_message = self._render_prompts(
-                task=task,
-                mission_id=mission_id,
-                project_bucket=project_bucket,
-                workspace_dir=workspace_dir,
-                store=store,
-                project_id=project_id,
-                provider_name=role_config.worker_provider.name,
-            )
-
-            acp_env = _acp_subprocess_env(role_config.worker_provider)
-            acp_env["ZENITH_HANDOFF_PATH"] = str(handoff_path)
-            acp_env["ZENITH_NODE_ID"] = task.id
-            acp_env["ZENITH_NODE_TYPE"] = task.type
-            acp_env["ZENITH_PROJECT_ID"] = project_id
-            acp_env["ZENITH_MISSION_ID"] = mission_id
-            acp_env["ZENITH_HOME"] = str(self.config.harness_home)
-
-            prompt_stop_reason, worker_exit_code, worker_stderr, session_error = await self._execute_acp_subprocess(
-                acp_command=acp_command,
-                workspace_dir=workspace_dir,
-                acp_env=acp_env,
-                provider=role_config.worker_provider,
-                mcp_cfg=worker_mcp_cfg,
-                first_message=first_message,
-                report_path=handoff_path,
-                progress_callback=progress_callback,
-            )
-        finally:
-            async with _port_lock:
-                _allocated_ports.discard(mcp_port)
-            if mcp_process is not None:
-                if mcp_process.returncode is None:
-                    try:
-                        mcp_process.terminate()
-                    except OSError:
-                        pass
-                await _close_subprocess(mcp_process, timeout=5)
-
-        if handoff_path.exists():
-            return self._parse_handoff_file(handoff_path, task)
-        return self._synthesize_and_persist_missing_handoff(
+        return self._resolve_handoff(
             handoff_path=handoff_path,
             task=task,
-            stop_reason=prompt_stop_reason,
-            exit_code=worker_exit_code,
-            stderr=worker_stderr,
+            prompt_stop_reason=prompt_stop_reason,
+            worker_exit_code=worker_exit_code,
+            worker_stderr=worker_stderr,
             session_error=session_error,
         )
 
     def _parse_handoff_file(self, handoff_path: Path, task: Task) -> NodeHandoff:
         """Parse a handoff file written by the worker MCP server."""
         import json
+
         raw = handoff_path.read_text(encoding="utf-8")
         data = json.loads(raw)
         if isinstance(data, dict) and ("items" in data or "passed" in data):
@@ -874,6 +951,7 @@ class ACPNodeRunner:
 
         try:
             import json
+
             handoff_path.parent.mkdir(parents=True, exist_ok=True)
             handoff_path.write_text(
                 json.dumps(handoff.model_dump(mode="json"), indent=2),
@@ -898,8 +976,7 @@ class ACPNodeRunner:
         acp_command = role_config.resolved_worker_acp_command
         if not acp_command:
             raise RuntimeError(
-                "No ACP command for terminal reviewer. "
-                "Set ZENITH_TERMINAL_REVIEWER_ACP_COMMAND."
+                "No ACP command for terminal reviewer. Set ZENITH_TERMINAL_REVIEWER_ACP_COMMAND."
             )
         acp_command = _augment_acp_command(acp_command, role_config.worker_provider)
 
@@ -944,7 +1021,12 @@ class ACPNodeRunner:
                 provider_name=role_config.worker_provider.name,
             )
 
-            prompt_stop_reason, exit_code, stderr, session_error = await self._execute_acp_subprocess(
+            (
+                prompt_stop_reason,
+                exit_code,
+                stderr,
+                session_error,
+            ) = await self._execute_acp_subprocess(
                 acp_command=acp_command,
                 workspace_dir=workspace_dir,
                 acp_env=_acp_subprocess_env(role_config.worker_provider),
@@ -1085,16 +1167,12 @@ class ACPNodeRunner:
                 return False
             await asyncio.sleep(0.1)
 
-    async def _maybe_set_mode(
-        self, client: ACPClient, session_id: str, provider
-    ) -> None:
+    async def _maybe_set_mode(self, client: ACPClient, session_id: str, provider) -> None:
         mode = getattr(provider, "acp_runtime_mode", None)
         if not mode:
             return
         try:
-            await client.send_request(
-                "session/set_mode", {"sessionId": session_id, "modeId": mode}
-            )
+            await client.send_request("session/set_mode", {"sessionId": session_id, "modeId": mode})
         except ACPError as exc:
             raise ACPError(
                 f"Failed to set ACP runtime mode {mode!r} for {provider.name}: {exc}"
@@ -1198,9 +1276,7 @@ class ACPNodeRunner:
         renderer to template absolute paths.
         """
         workspace_dir = str(
-            Path(cwd).expanduser().resolve()
-            if cwd
-            else store.workspace_dir(project_id)
+            Path(cwd).expanduser().resolve() if cwd else store.workspace_dir(project_id)
         )
         project_bucket = str(store.zenith_dir(project_id))
         return workspace_dir, project_bucket
@@ -1299,6 +1375,8 @@ class ACPNodeRunner:
         return system_prompt
 
     # ---------------------------------------------------------------------------
+
+
 # Contract assertion truncation helpers
 # ---------------------------------------------------------------------------
 
@@ -1308,10 +1386,7 @@ def _truncate_contract_assertion(body: str, path: str) -> str:
     if len(body) <= CONTRACT_INLINE_MAX:
         return body.rstrip() + "\n"
     preview = body[:CONTRACT_TRUNCATE_PREVIEW].rstrip()
-    return (
-        f"{preview}\n\n"
-        f"--- TRUNCATED ({len(body)} chars, read full at `{path}`) ---\n"
-    )
+    return f"{preview}\n\n--- TRUNCATED ({len(body)} chars, read full at `{path}`) ---\n"
 
 
 def _format_attempts_dir_hint(attempts_dir: str) -> str:
@@ -1326,7 +1401,6 @@ def _format_attempts_dir_hint(attempts_dir: str) -> str:
 # ---------------------------------------------------------------------------
 # ACP Node Runner
 # ---------------------------------------------------------------------------
-
 
 
 def _run_coro_blocking(coro: Coroutine[Any, Any, Any]) -> Any:
@@ -1408,9 +1482,7 @@ class ACPTerminalReviewer:
         self.loader = AssetLoader(config)
         self.runner = ACPNodeRunner(config=config, loader=self.loader)
 
-    def review(
-        self, project_id: str, mission_id: str, spawn_ts: str
-    ) -> TerminalReviewHandoff:
+    def review(self, project_id: str, mission_id: str, spawn_ts: str) -> TerminalReviewHandoff:
         return _run_coro_blocking(
             self.runner.run_terminal_review(
                 project_id=project_id,
