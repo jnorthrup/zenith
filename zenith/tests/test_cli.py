@@ -1,4 +1,5 @@
 """CLI integration tests — init / list-projects / show-project / install-skills."""
+
 from __future__ import annotations
 
 import json
@@ -64,19 +65,13 @@ class TestInit:
         gitignore = workspace / ".gitignore"
         gitignore.write_text("node_modules/\n")
         original = gitignore.read_text()
-        r = runner.invoke(
-            cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"]
-        )
+        r = runner.invoke(cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"])
         assert r.exit_code == 0, r.output
         assert gitignore.read_text() == original
 
-    def test_idempotent(
-        self, runner: CliRunner, workspace: Path, env: dict[str, str]
-    ) -> None:
+    def test_idempotent(self, runner: CliRunner, workspace: Path, env: dict[str, str]) -> None:
         for _ in range(2):
-            r = runner.invoke(
-                cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"]
-            )
+            r = runner.invoke(cli, ["init", "--workspace-dir", str(workspace), "--agent", "claude"])
             assert r.exit_code == 0, r.output
         # .mcp.json preserved across reruns.
         assert (workspace / ".mcp.json").exists()
@@ -94,7 +89,10 @@ class TestInit:
         assert server["args"] == _expected_mcp_server_args()
         assert f"Initialized v5 project workspace at {workspace}" in r.output
         assert "Start your agent from the initialized project workspace" in r.output
-        assert "Read .codex/orchestrator_prompt.md and use Zenith to run this mission." in r.output
+        assert (
+            "Read the .codex/orchestrator_prompt.md and treat it as your primary role, then use Zenith to run this mission."
+            in r.output
+        )
 
     def test_claude_init_writes_runtime_validator_env_names(
         self, runner: CliRunner, workspace: Path, env: dict[str, str]

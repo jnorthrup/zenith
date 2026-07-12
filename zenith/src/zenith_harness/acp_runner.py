@@ -437,9 +437,9 @@ class ACPClient:
         env = os.environ.copy()
         for var in env_list:
             env[var["name"]] = var["value"]
-        full_cmd = " ".join([cmd, *args])
-        process = await asyncio.create_subprocess_shell(
-            full_cmd,
+        process = await asyncio.create_subprocess_exec(
+            cmd,
+            *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=cwd,
